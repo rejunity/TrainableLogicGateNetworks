@@ -6,7 +6,7 @@
 uv run mnist.py
 ```
 
-Configuration options are available through the `.env` file. A config example is given in `.env.example.`
+Configuration options are available through the `.env` file. A config example is given in `.env.example`.
 
 ## Package manager
 

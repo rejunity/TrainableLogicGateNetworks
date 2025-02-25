@@ -48,30 +48,34 @@ TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.9))
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
 ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true", "1", "yes")
 
-SEED = config.get("SEED", random.randint(0, 1024*1024))
+# SEED = config.get("SEED", random.randint(0, 1024*1024))
+SEED = config.get("SEED", 97798)
 NET_ARCHITECTURE = [int(l) for l in config.get("NET_ARCHITECTURE", "[1300,1300,1300]")[1:-1].split(',')]
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
-EPOCHS = int(config.get("EPOCHS", 100))
+EPOCHS = int(config.get("EPOCHS", 50))
 EPOCH_STEPS = round(54_000 / BATCH_SIZE) # 54K train /6K val/10K test
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS // 4))
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
 
-LEARNING_RATE = float(config.get("LEARNING_RATE", 1e-3))
-DECAY_PASSTHROUGH_GATES = float(config.get("DECAY_PASSTHROUGH_GATES", 0.005))
-DECAY_CONST_GATES = float(config.get("DECAY_CONST_GATES", 0.005))
+LEARNING_RATE = float(config.get("LEARNING_RATE", 0.01))
+DECAY_CONST_GATES = float(config.get("DECAY_CONST_GATES", 0.05))
 
-
+PASSTHROUGH_REGULARIZATION = float(config.get("PASSTHROUGH_REGULARIZATION", 1.))
+CONNECTION_REGULARIZATION = float(config.get("CONNECTION_REGULARIZATION", 5.))
+GATE_WEIGHT_REGULARIZATION = float(config.get("GATE_WEIGHT_REGULARIZATION", 1.))
+LOSS_CE_STRENGTH = float(config.get("LOSS_CE_STRENGTH", 0.9))
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "NET_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
-               "LEARNING_RATE", "DECAY_PASSTHROUGH_GATES", "DECAY_CONST_GATES"]
+               "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "DECAY_CONST_GATES",
+               "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
-# Make sure sensitive configs are not logged
+# Making sure sensitive configs are not logged
 assert "PAPERTRAIL_HOST" not in config_printout_dict.keys()
 assert "PAPERTRAIL_PORT" not in config_printout_dict.keys()
 assert "WANDB_KEY" not in config_printout_dict.keys()
@@ -221,14 +225,15 @@ class Model(nn.Module):
         X = F.softmax(X, dim=-1)
         return X
 
-    def get_passthrough_fraction_unbinarized(self):
+    def get_passthrough_fraction(self):
         pass_fraction_array = torch.zeros(len(self.layers), dtype=torch.float32, device=device)
+        indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
         for layer_ix, layer in enumerate(self.layers):
-            total_weight = torch.abs(layer.w.data.detach()).sum()
-            indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
-            pass_weight = torch.abs(layer.w.data.detach()[indices, :]).sum()
+            weights_after_softmax = F.softmax(layer.w, dim=0)
+            pass_weight = (weights_after_softmax[indices, :]).sum()
+            total_weight = weights_after_softmax.sum()
             pass_fraction_array[layer_ix] = pass_weight / total_weight
-        return pass_fraction_array.tolist()
+        return pass_fraction_array
     
 
 ############################ DATA ########################
@@ -271,7 +276,6 @@ train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size],
 if ONLY_USE_DATA_SUBSET:
     train_dataset = torch.utils.data.Subset(train_dataset, range(1024))
     val_dataset = torch.utils.data.Subset(val_dataset, range(1024))
-    test_dataset = torch.utils.data.Subset(test_dataset, range(1024))
 
 ### MOVE TRAIN DATASET TO GPU ###
 
@@ -316,9 +320,13 @@ test_labels = torch.nn.functional.one_hot(test_labels_, num_classes=NUMBER_OF_CA
 test_labels = test_labels.type(torch.float32)
 
 
+### INSTANTIATE THE MODEL AND MOVE TO GPU ###
+
+model = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+
 ### VALIDATE ###
 
-def validate(dataset="val"):
+def validate(dataset="val", model=model):
     if dataset == "val":
         number_of_samples = val_dataset_samples
         sample_images = val_images
@@ -350,24 +358,55 @@ def validate(dataset="val"):
     val_accuracy = correct / val_steps
     return val_loss, val_accuracy
 
+def binarize_model(model=model, bin_value=1):
+    model_binarized = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+    model_binarized.load_state_dict(model.state_dict())
+
+    for layer_idx in range(0, len(model_binarized.layers)):
+        ones_at = torch.argmax(model_binarized.layers[layer_idx].w.data, dim=0)
+        model_binarized.layers[layer_idx].w.data.zero_()
+        model_binarized.layers[layer_idx].w.data.scatter_(dim=0, index=ones_at.unsqueeze(0), value=bin_value)
+
+        ones_at = torch.argmax(model_binarized.layers[layer_idx].c.data, dim=0)
+        model_binarized.layers[layer_idx].c.data.zero_()
+        model_binarized.layers[layer_idx].c.data.scatter_(dim=0, index=ones_at.unsqueeze(0), value=bin_value)
+
+        model_binarized.layers[layer_idx].binarized = True
+
+    return model_binarized
+
+def l1_maxOnly_regularization(weights_after_softmax):
+    max_values, _ = torch.max(weights_after_softmax, dim=0, keepdim=True)
+    non_max_sum = (1 - max_values).sum()
+    largest_possible_sum = torch.prod(torch.tensor(weights_after_softmax.shape[1:])) # when all elements are uniform; cutting out 0 dim since it is maxxed over
+    return non_max_sum / largest_possible_sum # uniform distribution gives 1 per layer
+
+def passthrough_regularization(weights_after_softmax):
+    indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
+    pass_weight = (weights_after_softmax[indices, :]).sum()
+    total_weight = weights_after_softmax.sum()
+    return pass_weight / total_weight
+
 
 ### TRAIN ###
-
-model = Model(seed=SEED, 
-              net_architecture=NET_ARCHITECTURE, 
-              number_of_categories=NUMBER_OF_CATEGORIES, 
-              input_size=INPUT_SIZE,
-              ).to(device)
 
 val_loss, val_accuracy = validate(dataset="val")
 log(f"INIT VAL loss={val_loss:.3f} acc={val_accuracy*100:.2f}%")
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
 
+### load ###
+# model.load_state_dict(torch.load("20250225-140458_binTestAcc7911_seed982779_epochs100_3x300_b256_lr10.pth", map_location=torch.device(device), weights_only=False))
+# val_loss, val_accuracy = validate(dataset="val")
+# log(f"INIT VAL loss={val_loss:.3f} acc={val_accuracy*100:.2f}%")
+if (CONNECTION_REGULARIZATION > 0) and (GATE_WEIGHT_REGULARIZATION  > 0):
+    log("REGULARIZATING")
+### end load ###
 
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) #!!!
 time_start = time.time()
-# loss_hist = []
+
+
 for i in range(TRAINING_STEPS):
     indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
     x = train_images[indices]
@@ -375,33 +414,61 @@ for i in range(TRAINING_STEPS):
     optimizer.zero_grad()
     with torch.set_grad_enabled(True):
         model_output = model(x)
-        loss = F.cross_entropy(model_output, y)
+        loss_ce = F.cross_entropy(model_output, y) * LOSS_CE_STRENGTH
+
+        connection_regularization_loss = 0
+        gate_weight_regularization_loss = 0
+        passthrough_regularization_loss = 0
+        for layer in model.layers:
+            passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
+            connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))
+            gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0))
+        
+        passthrough_regularization_loss = passthrough_regularization_loss / len(model.layers)
+        connection_regularization_loss = connection_regularization_loss / len(model.layers)
+        gate_weight_regularization_loss = gate_weight_regularization_loss / len(model.layers)
+        regularization_loss = PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss + CONNECTION_REGULARIZATION * connection_regularization_loss + GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss
+        regularization_loss = (1 - LOSS_CE_STRENGTH) * regularization_loss
+        
+        loss = loss_ce + regularization_loss
         loss.backward()
         optimizer.step()
 
+        # TODO: rewrite this as regularization
         for l in model.layers:
-            for passthrough_gate_ix in [3,5,10,12]:
-                l.w.data[passthrough_gate_ix, :] = l.w.data[passthrough_gate_ix, :] * (1 - LEARNING_RATE*DECAY_PASSTHROUGH_GATES)
             for const_gate_ix in [0,15]:
                 l.w.data[const_gate_ix, :] = l.w.data[const_gate_ix, :] * (1 - LEARNING_RATE*DECAY_CONST_GATES)
 
 
     if (i + 1) % PRINTOUT_EVERY == 0:
-        passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction_unbinarized()])
-        log(f"Iteration {i + 1:10} - Loss {loss:.3f} - Pass {passthrough_log}")
-        WANDB_KEY and wandb.log({"training_step": i, "loss": loss})
+        passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction().tolist()])
+        log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}% - Pass {passthrough_log}")
+        WANDB_KEY and wandb.log({"training_step": i, "loss": loss, "connection_regularization_loss":connection_regularization_loss, "gate_weight_regularization_loss":gate_weight_regularization_loss, 
+            "regularization_loss_fraction":(1-loss_ce/loss)*100, "passthrough_regularization_loss":passthrough_regularization_loss})
+        # log(f"loss_ce={F.cross_entropy(model_output, y).detach().item()}")
+        # log(f"connection_regularization_loss={connection_regularization_loss}")
+        # log(f"gate_weight_regularization_loss={gate_weight_regularization_loss}")
+        # log(f"passthrough_regularization_loss={passthrough_regularization_loss}")
     if (i + 1) % VALIDATE_EVERY == 0:
         current_epoch = (i+1) // EPOCH_STEPS
 
         train_loss, train_acc = validate('train')
-        log(f"EPOCH={current_epoch}/{EPOCHS} TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
+        # log(f"EPOCH={current_epoch}/{EPOCHS}     TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
+        model_binarized = binarize_model()
+        _, bin_train_acc = validate(dataset="train", model=model_binarized)
+        log(f"EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc*100-bin_train_acc*100:.2f}%")
+        
         
         val_loss, val_acc = validate()
-        log(f"EPOCH={current_epoch}/{EPOCHS} VAL loss={val_loss:.3f} acc={val_acc*100:.2f}%")
+        _, bin_val_acc = validate(model=model_binarized)
+        # log(f"EPOCH={current_epoch}/{EPOCHS} VAL loss={val_loss:.3f} acc={val_acc*100:.2f}%")
+        log(f"EPOCH={current_epoch}/{EPOCHS} BIN VAL acc={bin_val_acc*100:.2f}%,   val_acc_diff={val_acc*100-bin_val_acc*100:.2f}%")
 
         WANDB_KEY and wandb.log({"epoch": current_epoch, 
             "train_loss": train_loss, "train_acc": train_acc*100,
             "val_loss": val_loss, "val_acc": val_acc*100,
+            "bin_train_acc": bin_train_acc*100, "train_acc_diff": train_acc*100-bin_train_acc*100,
+            "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
             })
 
 
@@ -410,9 +477,17 @@ log(f"Training took {time_end - time_start:.2f} seconds, per iteration: {(time_e
 
 test_loss, test_acc = validate('test')
 log(f"TEST loss={test_loss:.3f} acc={test_acc*100:.2f}%")
+
+
+
+
+model_binarized = binarize_model()
+bin_test_loss, bin_test_acc = validate(dataset="test", model=model_binarized)
+log(f"BIN TEST loss={bin_test_loss:.3f} acc={bin_test_acc*100:.2f}%")
+
 model_filename = (
     f"{datetime.now(ZoneInfo(TIMEZONE)).strftime('%Y%m%d-%H%M%S')}"
-    f"_testacc{round(test_acc * 10000)}"
+    f"_binTestAcc{round(bin_test_acc * 10000)}"
     f"_seed{SEED}_epochs{EPOCHS}_{len(NET_ARCHITECTURE)}x{NET_ARCHITECTURE[0]}"
     f"_b{BATCH_SIZE}_lr{LEARNING_RATE * 1000:.0f}.pth"
 )
@@ -423,5 +498,6 @@ WANDB_KEY and wandb.log({
             "final_train_loss": train_loss, "final_train_acc": train_acc*100,
             "final_val_loss": val_loss, "final_val_acc": val_acc*100,
             "final_test_loss": test_loss, "final_test_acc": test_acc*100,
+            "final_bin_test_loss": bin_test_loss, "final_bin_test_acc": bin_test_acc*100,
     })
 WANDB_KEY and wandb.finish()

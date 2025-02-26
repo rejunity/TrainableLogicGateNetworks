@@ -48,8 +48,9 @@ TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.9))
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
 ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true", "1", "yes")
 
-# SEED = config.get("SEED", random.randint(0, 1024*1024))
-SEED = config.get("SEED", 97798)
+SEED = int(config.get("SEED", 97798))
+if SEED < 0:
+    SEED = random.randint(0, 1000_000)
 NET_ARCHITECTURE = [int(l) for l in config.get("NET_ARCHITECTURE", "[1300,1300,1300]")[1:-1].split(',')]
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
@@ -471,6 +472,7 @@ for i in range(TRAINING_STEPS):
             "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
             })
 
+log(f"Network architecture: {NET_ARCHITECTURE}")
 
 time_end = time.time()
 log(f"Training took {time_end - time_start:.2f} seconds, per iteration: {(time_end - time_start) / TRAINING_STEPS * 1000:.2f} milliseconds")

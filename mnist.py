@@ -48,8 +48,8 @@ TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.9))
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
 ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true", "1", "yes")
 
-# SEED = config.get("SEED", random.randint(0, 1024*1024))
-SEED = config.get("SEED", 97798)
+SEED = config.get("SEED", random.randint(0, 1024*1024))
+# SEED = config.get("SEED", 97798)
 NET_ARCHITECTURE = [int(l) for l in config.get("NET_ARCHITECTURE", "[1300,1300,1300]")[1:-1].split(',')]
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
@@ -60,8 +60,9 @@ PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS // 4))
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
 
 LEARNING_RATE = float(config.get("LEARNING_RATE", 0.01))
-DECAY_CONST_GATES = float(config.get("DECAY_CONST_GATES", 0.05))
+# DECAY_CONST_GATES = float(config.get("DECAY_CONST_GATES", 0.05))
 
+CONST_REGULARIZATION = float(config.get("CONST_REGULARIZATION", 5.))
 PASSTHROUGH_REGULARIZATION = float(config.get("PASSTHROUGH_REGULARIZATION", 1.))
 CONNECTION_REGULARIZATION = float(config.get("CONNECTION_REGULARIZATION", 5.))
 GATE_WEIGHT_REGULARIZATION = float(config.get("GATE_WEIGHT_REGULARIZATION", 1.))
@@ -71,7 +72,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "NET_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
-               "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "DECAY_CONST_GATES",
+               "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "CONST_REGULARIZATION",
                "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
@@ -387,6 +388,11 @@ def passthrough_regularization(weights_after_softmax):
     total_weight = weights_after_softmax.sum()
     return pass_weight / total_weight
 
+def const_regularization(weights_after_softmax):
+    indices = torch.tensor([0, 15], dtype=torch.long)
+    const_weight = (weights_after_softmax[indices, :]).sum()
+    total_weight = weights_after_softmax.sum()
+    return const_weight / total_weight
 
 ### TRAIN ###
 
@@ -398,12 +404,12 @@ WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
 # model.load_state_dict(torch.load("20250225-140458_binTestAcc7911_seed982779_epochs100_3x300_b256_lr10.pth", map_location=torch.device(device), weights_only=False))
 # val_loss, val_accuracy = validate(dataset="val")
 # log(f"INIT VAL loss={val_loss:.3f} acc={val_accuracy*100:.2f}%")
-if (CONNECTION_REGULARIZATION > 0) and (GATE_WEIGHT_REGULARIZATION  > 0):
-    log("REGULARIZATING")
+# if (CONNECTION_REGULARIZATION > 0) and (GATE_WEIGHT_REGULARIZATION  > 0):
+    # log("REGULARIZATING")
 ### end load ###
 
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) #!!!
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
 time_start = time.time()
 
 
@@ -419,32 +425,29 @@ for i in range(TRAINING_STEPS):
         connection_regularization_loss = 0
         gate_weight_regularization_loss = 0
         passthrough_regularization_loss = 0
+        const_regularization_loss = 0
         for layer in model.layers:
+            const_regularization_loss += const_regularization(F.softmax(layer.w, dim=0))
             passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
             connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))
             gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0))
         
+        const_regularization_loss = const_regularization_loss / len(model.layers)
         passthrough_regularization_loss = passthrough_regularization_loss / len(model.layers)
         connection_regularization_loss = connection_regularization_loss / len(model.layers)
         gate_weight_regularization_loss = gate_weight_regularization_loss / len(model.layers)
-        regularization_loss = PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss + CONNECTION_REGULARIZATION * connection_regularization_loss + GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss
+        regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss + CONNECTION_REGULARIZATION * connection_regularization_loss + GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss
         regularization_loss = (1 - LOSS_CE_STRENGTH) * regularization_loss
         
         loss = loss_ce + regularization_loss
         loss.backward()
         optimizer.step()
 
-        # TODO: rewrite this as regularization
-        for l in model.layers:
-            for const_gate_ix in [0,15]:
-                l.w.data[const_gate_ix, :] = l.w.data[const_gate_ix, :] * (1 - LEARNING_RATE*DECAY_CONST_GATES)
-
-
     if (i + 1) % PRINTOUT_EVERY == 0:
         passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction().tolist()])
         log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}% - Pass {passthrough_log}")
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, "connection_regularization_loss":connection_regularization_loss, "gate_weight_regularization_loss":gate_weight_regularization_loss, 
-            "regularization_loss_fraction":(1-loss_ce/loss)*100, "passthrough_regularization_loss":passthrough_regularization_loss})
+            "regularization_loss_fraction":(1-loss_ce/loss)*100, "passthrough_regularization_loss":passthrough_regularization_loss, "const_regularization_loss":const_regularization_loss})
         # log(f"loss_ce={F.cross_entropy(model_output, y).detach().item()}")
         # log(f"connection_regularization_loss={connection_regularization_loss}")
         # log(f"gate_weight_regularization_loss={gate_weight_regularization_loss}")

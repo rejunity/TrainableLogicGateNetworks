@@ -472,6 +472,7 @@ for i in range(TRAINING_STEPS):
             "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
             })
 
+log(f"Network architecture: {NET_ARCHITECTURE}")
 
 time_end = time.time()
 log(f"Training took {time_end - time_start:.2f} seconds, per iteration: {(time_end - time_start) / TRAINING_STEPS * 1000:.2f} milliseconds")

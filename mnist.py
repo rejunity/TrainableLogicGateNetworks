@@ -296,6 +296,28 @@ class Model(nn.Module):
                 gate_fraction_array.append(pass_weight / total_weight)
         return torch.mean(torch.tensor(gate_fraction_array)).item()
 
+    def state_dict(self, *args, **kwargs):
+        state_dict = super(Model, self).state_dict(*args, **kwargs)
+        state_dict['net_architecture'] = self.net_architecture
+        state_dict['seed'] = self.seed
+        if hasattr(self, 'dataset_input'):
+            state_dict['dataset_input'] = self.dataset_input
+        if hasattr(self, 'dataset_output'):
+            state_dict['dataset_output'] = self.dataset_output
+        return state_dict
+
+    def load_state_dict(self, state_dict, strict=True):
+        if 'net_architecture' in state_dict:
+            self.net_architecture = state_dict.pop('net_architecture')
+        if 'seed' in state_dict:
+            self.seed = state_dict.pop('seed')
+        super(Model, self).load_state_dict(state_dict, strict=strict)
+    
+
+############################ DATA ########################
+
+
+
 
     def state_dict(self, *args, **kwargs):
         state_dict = super(Model, self).state_dict(*args, **kwargs)

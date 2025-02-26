@@ -1,8 +1,14 @@
 # TrainableLogicGateNetworks
 
-## How to run
+## Prerequisites
 
-This repo uses the uv package manager, see the [uv repo](https://github.com/astral-sh/uv/) for installation instructions.
+This repo uses the *uv* package manager, see the [uv repo](https://github.com/astral-sh/uv/) for installation instructions or simply install *uv* via pip:
+
+```bash
+pip install uv
+```
+
+## How to run
 
 The script will run as is with default settings, no config needed.
 ```bash

@@ -595,6 +595,7 @@ for i in range(TRAINING_STEPS):
              "gate_perc_or": model.compute_selected_gates_fraction([7, 8])*100.,
             })
 
+log(f"Network architecture: {NET_ARCHITECTURE}")
 
 log(f"Network architecture: {NET_ARCHITECTURE}")
 

@@ -1,4 +1,4 @@
-# TrainableLogicGateNetworks
+# Trainable Logic Gate Networks
 
 ## Prerequisites
 

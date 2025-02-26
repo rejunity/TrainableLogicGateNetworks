@@ -48,7 +48,7 @@ TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.9))
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
 ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true", "1", "yes")
 
-SEED = config.get("SEED", 97798)
+SEED = int(config.get("SEED", 97798))
 if SEED < 0:
     SEED = random.randint(0, 1000_000)
 NET_ARCHITECTURE = [int(l) for l in config.get("NET_ARCHITECTURE", "[1300,1300,1300]")[1:-1].split(',')]

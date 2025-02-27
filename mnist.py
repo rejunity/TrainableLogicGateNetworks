@@ -244,6 +244,12 @@ class Model(nn.Module):
             state_dict['dataset_input'] = self.dataset_input
         if hasattr(self, 'dataset_output'):
             state_dict['dataset_output'] = self.dataset_output
+        connections = [ [], [] ]
+        for layer in self.layers:
+            ones_at = torch.argmax(layer.c, dim=0)
+            connections[0].append(ones_at[:,0])
+            connections[1].append(ones_at[:,1])
+        state_dict['connections'] = connections
         return state_dict
 
     def load_state_dict(self, state_dict, strict=True):
@@ -251,6 +257,8 @@ class Model(nn.Module):
             self.net_architecture = state_dict.pop('net_architecture')
         if 'seed' in state_dict:
             self.seed = state_dict.pop('seed')
+        if 'connections' in state_dict:
+            state_dict.pop('connections')
         super(Model, self).load_state_dict(state_dict, strict=strict)
     
 

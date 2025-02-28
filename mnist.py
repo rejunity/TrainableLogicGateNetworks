@@ -5,6 +5,7 @@
 #   "wandb",
 #   "torch",
 #   "torchvision",
+#   "IPython",
 # ]
 # [tool.uv]
 # exclude-newer = "2024-02-20T00:00:00Z"
@@ -60,7 +61,6 @@ PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS // 4))
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
 
 LEARNING_RATE = float(config.get("LEARNING_RATE", 0.01))
-# DECAY_CONST_GATES = float(config.get("DECAY_CONST_GATES", 0.05))
 
 CONST_REGULARIZATION = float(config.get("CONST_REGULARIZATION", 5.))
 PASSTHROUGH_REGULARIZATION = float(config.get("PASSTHROUGH_REGULARIZATION", 1.))
@@ -81,8 +81,13 @@ assert "PAPERTRAIL_HOST" not in config_printout_dict.keys()
 assert "PAPERTRAIL_PORT" not in config_printout_dict.keys()
 assert "WANDB_KEY" not in config_printout_dict.keys()
 
-WANDB_KEY and wandb.login(key=WANDB_KEY)
-WANDB_KEY and (wandb_run := wandb.init(project=WANDB_PROJECT, name=f"{LOG_NAME}_{SEED}", config=config_printout_dict))
+if WANDB_KEY is not None:
+    wandb.login(key=WANDB_KEY)
+    wandb_run = wandb.init(project=WANDB_PROJECT, name=f"{LOG_NAME}_{SEED}", config=config_printout_dict)
+    script_path = os.path.abspath(__file__)
+    artifact = wandb.Artifact("source_code", type="code")
+    artifact.add_file(script_path)
+    wandb.log_artifact(artifact)
 
 ############################ LOG ########################
 
@@ -321,46 +326,44 @@ test_labels = torch.nn.functional.one_hot(test_labels_, num_classes=NUMBER_OF_CA
 test_labels = test_labels.type(torch.float32)
 
 
-### INSTANTIATE THE MODEL AND MOVE TO GPU ###
-
-model = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
-
 ### VALIDATE ###
 
-def validate(dataset="val", model=model):
-    if dataset == "val":
-        number_of_samples = val_dataset_samples
-        sample_images = val_images
-        sample_labels = val_labels
-    elif dataset == "test":
-        number_of_samples = test_dataset_samples
-        sample_images = test_images
-        sample_labels = test_labels
-    elif dataset == "train":
-        number_of_samples = train_dataset_samples
-        sample_images = train_images
-        sample_labels = train_labels
-    else:
-        raise IOError(f"Unknown dataset {dataset}")
-    val_loss = 0.0
-    val_steps = 0
-    correct = 0
-    for start_idx in range(0, number_of_samples, BATCH_SIZE):
-        end_idx = min(start_idx + BATCH_SIZE, number_of_samples)
-        val_indices = torch.arange(start_idx, end_idx, device=device)    
-        x_val = sample_images[val_indices]
-        y_val = sample_labels[val_indices]
-        with torch.no_grad():
-            val_output = model(x_val)
-            val_loss += F.cross_entropy(val_output, y_val, reduction="sum").item()
-            correct += (val_output.argmax(dim=1) == y_val.argmax(dim=1)).sum().item()
-        val_steps += len(x_val)
-    val_loss /= val_steps
-    val_accuracy = correct / val_steps
-    return val_loss, val_accuracy
+def get_validate(default_model):
+    def validate(dataset="val", model=default_model):
+        if dataset == "val":
+            number_of_samples = val_dataset_samples
+            sample_images = val_images
+            sample_labels = val_labels
+        elif dataset == "test":
+            number_of_samples = test_dataset_samples
+            sample_images = test_images
+            sample_labels = test_labels
+        elif dataset == "train":
+            number_of_samples = train_dataset_samples
+            sample_images = train_images
+            sample_labels = train_labels
+        else:
+            raise IOError(f"Unknown dataset {dataset}")
+        val_loss = 0.0
+        val_steps = 0
+        correct = 0
+        for start_idx in range(0, number_of_samples, BATCH_SIZE):
+            end_idx = min(start_idx + BATCH_SIZE, number_of_samples)
+            val_indices = torch.arange(start_idx, end_idx, device=device)    
+            x_val = sample_images[val_indices]
+            y_val = sample_labels[val_indices]
+            with torch.no_grad():
+                val_output = model(x_val)
+                val_loss += F.cross_entropy(val_output, y_val, reduction="sum").item()
+                correct += (val_output.argmax(dim=1) == y_val.argmax(dim=1)).sum().item()
+            val_steps += len(x_val)
+        val_loss /= val_steps
+        val_accuracy = correct / val_steps
+        return val_loss, val_accuracy
+    return validate
 
-def binarize_model(model=model, bin_value=1):
-    model_binarized = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+def get_binarized_model(model=None, bin_value=1): #!!!
+    model_binarized = Model(seed=SEED, net_architecture=model.net_architecture, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
     model_binarized.load_state_dict(model.state_dict())
 
     for layer_idx in range(0, len(model_binarized.layers)):
@@ -394,6 +397,13 @@ def const_regularization(weights_after_softmax):
     total_weight = weights_after_softmax.sum()
     return const_weight / total_weight
 
+### INSTANTIATE THE MODEL AND MOVE TO GPU ###
+
+# model = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+#!!!
+model = Model(seed=SEED, net_architecture=[NET_ARCHITECTURE[0]], number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+validate = get_validate(model)
+
 ### TRAIN ###
 
 val_loss, val_accuracy = validate(dataset="val")
@@ -414,11 +424,50 @@ time_start = time.time()
 
 
 for i in range(TRAINING_STEPS):
+    # if i == TRAINING_STEPS // 3:
+    if i == EPOCH_STEPS * 50: # 100 epochs
+        with torch.no_grad():
+            log("---> FULL MODEL <---")
+            model2 = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+            model2.layers[0].w.copy_(model.layers[0].w)
+            model2.layers[0].c.copy_(model.layers[0].c)
+            model = model2
+            model.layers[0].w.requires_grad = False
+            model.layers[0].c.requires_grad = False
+
+            
+            model.layers[1].w.data.zero_()
+            model.layers[1].w.data[3, :] = 0.1 # A #!!!
+
+            model.layers[1].c.data.zero_() # make this 1->1, 2->2 etc
+            indices = torch.arange(1, model.layers[1].c.shape[0])
+            model.layers[1].c.data[indices, indices, :] = 0.1
+
+            PASSTHROUGH_REGULARIZATION = 100.
+
+            # import IPython
+            # IPython.embed()
+
+            validate = get_validate(model)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
+    # if i == TRAINING_STEPS *2 // 3:
+    if i == EPOCH_STEPS * 100: # 200 epochs
+            log("---> GRAD RESTORED <---")
+            PASSTHROUGH_REGULARIZATION = 1.
+            model.layers[0].w.requires_grad = True
+            model.layers[0].c.requires_grad = True
+            optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
+
     indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
     x = train_images[indices]
     y = train_labels[indices]
     optimizer.zero_grad()
     with torch.set_grad_enabled(True):
+        # !!! hard remove const
+        for l in model.layers:
+            for const_gate_ix in [0,15]:
+                l.w.data[const_gate_ix, :] = 0
+
         model_output = model(x)
         loss_ce = F.cross_entropy(model_output, y) * LOSS_CE_STRENGTH
 
@@ -427,13 +476,13 @@ for i in range(TRAINING_STEPS):
         passthrough_regularization_loss = 0
         const_regularization_loss = 0
         for layer in model.layers:
-            const_regularization_loss += const_regularization(F.softmax(layer.w, dim=0))
+            # const_regularization_loss += const_regularization(F.softmax(layer.w, dim=0)) #!!!
             passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
-            connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))
-            gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0))
+            # connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))  #!!!
+            # gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0)) #!!!
         
-        const_regularization_loss = const_regularization_loss / len(model.layers)
-        passthrough_regularization_loss = passthrough_regularization_loss / len(model.layers)
+        # const_regularization_loss = const_regularization_loss / len(model.layers) #!!!
+        # passthrough_regularization_loss = passthrough_regularization_loss / len(model.layers) #!!!
         connection_regularization_loss = connection_regularization_loss / len(model.layers)
         gate_weight_regularization_loss = gate_weight_regularization_loss / len(model.layers)
         regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss + CONNECTION_REGULARIZATION * connection_regularization_loss + GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss
@@ -457,7 +506,7 @@ for i in range(TRAINING_STEPS):
 
         train_loss, train_acc = validate('train')
         # log(f"EPOCH={current_epoch}/{EPOCHS}     TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
-        model_binarized = binarize_model()
+        model_binarized = get_binarized_model(model)
         _, bin_train_acc = validate(dataset="train", model=model_binarized)
         log(f"EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc*100-bin_train_acc*100:.2f}%")
         
@@ -474,6 +523,10 @@ for i in range(TRAINING_STEPS):
             "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
             })
 
+        if bin_val_acc * 100 > 95.: #!!!
+            log("--> GOAL ACHIEVED <--")
+            break
+
 
 time_end = time.time()
 log(f"Training took {time_end - time_start:.2f} seconds, per iteration: {(time_end - time_start) / TRAINING_STEPS * 1000:.2f} milliseconds")
@@ -484,7 +537,7 @@ log(f"TEST loss={test_loss:.3f} acc={test_acc*100:.2f}%")
 
 
 
-model_binarized = binarize_model()
+model_binarized = get_binarized_model(model)
 bin_test_loss, bin_test_acc = validate(dataset="test", model=model_binarized)
 log(f"BIN TEST loss={bin_test_loss:.3f} acc={bin_test_acc*100:.2f}%")
 
@@ -494,7 +547,7 @@ model_filename = (
     f"_seed{SEED}_epochs{EPOCHS}_{len(NET_ARCHITECTURE)}x{NET_ARCHITECTURE[0]}"
     f"_b{BATCH_SIZE}_lr{LEARNING_RATE * 1000:.0f}.pth"
 )
-torch.save(model.state_dict(), model_filename)
+# torch.save(model.state_dict(), model_filename) #!!!
 log(f"Saved to {model_filename}")
 
 WANDB_KEY and wandb.log({

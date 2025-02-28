@@ -415,6 +415,14 @@ def l1_maxOnly_regularization(weights_after_softmax):
     largest_possible_sum = torch.prod(torch.tensor(weights_after_softmax.shape[1:])) # when all elements are uniform; cutting out 0 dim since it is maxxed over
     return non_max_sum / largest_possible_sum # uniform distribution gives 1 per layer
 
+def l1_topk(weights_after_softmax, k=5): # similar to l1_maxOnly_regularization but goes to 1 when binarized
+    # assert len(weights_after_softmax.shape) == 2
+    normalization_factor = (weights_after_softmax.shape[0]-k)/weights_after_softmax.shape[0] * weights_after_softmax.shape[1] # in case of a uniform tensor
+    top_k_values, _ = torch.topk(weights_after_softmax, k, dim=0)
+    top_k_sum = top_k_values.sum(dim=0, keepdim=True)
+    non_top_k_sum = (1 - top_k_sum).sum()
+    return 1. - non_top_k_sum / normalization_factor
+
 def passthrough_regularization(weights_after_softmax):
     indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
     pass_weight = (weights_after_softmax[indices, :]).sum()
@@ -449,38 +457,36 @@ time_start = time.time()
 
 for i in range(TRAINING_STEPS):
     # if i == TRAINING_STEPS // 3:
-    if i == EPOCH_STEPS * 50: # 100 epochs
-        with torch.no_grad():
-            log("---> FULL MODEL <---")
-            model2 = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
-            model2.layers[0].w.copy_(model.layers[0].w)
-            model2.layers[0].c.copy_(model.layers[0].c)
-            model = model2
-            model.layers[0].w.requires_grad = False
-            model.layers[0].c.requires_grad = False
+    # if i == EPOCH_STEPS * 50: # 100 epochs
+    #     with torch.no_grad():
+    #         log("---> FULL MODEL <---")
+    #         model2 = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+    #         model2.layers[0].w.copy_(model.layers[0].w)
+    #         model2.layers[0].c.copy_(model.layers[0].c)
+    #         model = model2
+    #         model.layers[0].w.requires_grad = False
+    #         model.layers[0].c.requires_grad = False
 
             
-            model.layers[1].w.data.zero_()
-            model.layers[1].w.data[3, :] = 0.1 # A #!!!
+    #         model.layers[1].w.data.zero_()
+    #         model.layers[1].w.data[3, :] = 0.1 # A #!!!
 
-            model.layers[1].c.data.zero_() # make this 1->1, 2->2 etc
-            indices = torch.arange(1, model.layers[1].c.shape[0])
-            model.layers[1].c.data[indices, indices, :] = 0.1
+    #         model.layers[1].c.data.zero_() # make this 1->1, 2->2 etc
+    #         indices = torch.arange(1, model.layers[1].c.shape[0])
+    #         model.layers[1].c.data[indices, indices, :] = 0.1
 
-            PASSTHROUGH_REGULARIZATION = 100.
+    #         PASSTHROUGH_REGULARIZATION = 100.
 
-            # import IPython
-            # IPython.embed()
 
-            validate = get_validate(model)
-            optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
-    # if i == TRAINING_STEPS *2 // 3:
-    if i == EPOCH_STEPS * 100: # 200 epochs
-            log("---> GRAD RESTORED <---")
-            PASSTHROUGH_REGULARIZATION = 1.
-            model.layers[0].w.requires_grad = True
-            model.layers[0].c.requires_grad = True
-            optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
+    #         validate = get_validate(model)
+    #         optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
+    # # if i == TRAINING_STEPS *2 // 3:
+    # if i == EPOCH_STEPS * 100: # 200 epochs
+    #         log("---> GRAD RESTORED <---")
+    #         PASSTHROUGH_REGULARIZATION = 1.
+    #         model.layers[0].w.requires_grad = True
+    #         model.layers[0].c.requires_grad = True
+    #         optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
 
     indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
     x = train_images[indices]
@@ -507,15 +513,16 @@ for i in range(TRAINING_STEPS):
         
         # const_regularization_loss = const_regularization_loss / len(model.layers) #!!!
         # passthrough_regularization_loss = passthrough_regularization_loss / len(model.layers) #!!!
-        connection_regularization_loss = connection_regularization_loss / len(model.layers)
+        # connection_regularization_loss = CONNECTION_REGULARIZATION * connection_regularization_loss / len(model.layers)
         gate_weight_regularization_loss = gate_weight_regularization_loss / len(model.layers)
-        regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss + CONNECTION_REGULARIZATION * connection_regularization_loss + GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss
+        regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss +  connection_regularization_loss + GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss #!!!
         regularization_loss = (1 - LOSS_CE_STRENGTH) * regularization_loss
         
         loss = loss_ce + regularization_loss
         loss.backward()
         optimizer.step()
 
+    # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:
         passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction().tolist()])
         log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}% - Pass {passthrough_log}")
@@ -529,22 +536,98 @@ for i in range(TRAINING_STEPS):
         current_epoch = (i+1) // EPOCH_STEPS
 
         train_loss, train_acc = validate('train')
-        # log(f"EPOCH={current_epoch}/{EPOCHS}     TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
+        log(f"EPOCH={current_epoch}/{EPOCHS}     TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
         model_binarized = get_binarized_model(model)
         _, bin_train_acc = validate(dataset="train", model=model_binarized)
-        log(f"EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc*100-bin_train_acc*100:.2f}%")
-        
-        
-        val_loss, val_acc = validate()
-        _, bin_val_acc = validate(model=model_binarized)
-        # log(f"EPOCH={current_epoch}/{EPOCHS} VAL loss={val_loss:.3f} acc={val_acc*100:.2f}%")
-        log(f"EPOCH={current_epoch}/{EPOCHS} BIN VAL acc={bin_val_acc*100:.2f}%,   val_acc_diff={val_acc*100-bin_val_acc*100:.2f}%")
+        train_acc_diff = train_acc-bin_train_acc
+        log(f"EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
+#---------------------------------------------------------------------------------------
+
+
+        # def get_sparsity_metrics(model=None):
+        if True:
+            # newly_binarized = get_binarized_model(model=model, bin_value=100.)
+            
+            top1w = torch.tensor(0., device=device)
+            top2w = torch.tensor(0., device=device)
+            top4w = torch.tensor(0., device=device)
+            top8w = torch.tensor(0., device=device)
+
+            top1c = torch.tensor(0., device=device)
+            top2c = torch.tensor(0., device=device)
+            top4c = torch.tensor(0., device=device)
+            top8c = torch.tensor(0., device=device)
+            for layer_id in range(0,len(model.layers)):
+                weights_after_softmax = F.softmax(model.layers[layer_id].w, dim=0)
+                top1w += l1_topk(weights_after_softmax,k=1)
+                top2w += l1_topk(weights_after_softmax,k=2)
+                top4w += l1_topk(weights_after_softmax,k=4)
+                top8w += l1_topk(weights_after_softmax,k=8)
+                weights_after_softmax = F.softmax(model.layers[layer_id].c, dim=0)
+                top1c += l1_topk(weights_after_softmax,k=1)
+                top2c += l1_topk(weights_after_softmax,k=2)
+                top4c += l1_topk(weights_after_softmax,k=4)
+                top8c += l1_topk(weights_after_softmax,k=8)
+
+            top1w /= len(model.layers)
+            top2w /= len(model.layers)
+            top4w /= len(model.layers)
+            top8w /= len(model.layers)
+            top1c /= len(model.layers)
+            top2c /= len(model.layers)
+            top4c /= len(model.layers)
+            top8c /= len(model.layers)
+            # log(f"top1w={top1w},top2w={top2w},top4w={top4w},top8w={top8w}")
+            # log(f"top1c={top1c},top2c={top2c},top4c={top4c},top8c={top8c}")
+
+        # def meanW_to_maxW(model=None):
+        #     meanW_to_maxW_perLayer = []
+        #     for layer_id in range(0,len(model.layers)):
+        #         if not model.layers[layer_id].binarized:
+        #             weights_after_softmax = F.softmax(model.layers[layer_id].w, dim=0)
+        #         else:
+        #             weights_after_softmax = model.layers[layer_id].w
+        #         meanW_to_maxW_perLayer.append(
+        #             (torch.mean(torch.mean(weights_after_softmax, dim=0) / torch.max(weights_after_softmax, dim=0)[0])).item()
+        #             )
+        #     return(np.mean(meanW_to_maxW_perLayer))
+
+        # def weight_diff_from_binarized(model=model, model_binarized=model_binarized):
+        #     meanW_to_maxW_perLayer = []
+        #     for layer_id in range(0,len(model.layers)):
+        #         if not model.layers[layer_id].binarized:
+        #             weights_after_softmax = F.softmax(model.layers[layer_id].w, dim=0)
+        #         else:
+        #             weights_after_softmax = model.layers[layer_id].w
+        #         meanW_to_maxW_perLayer.append(
+        #             (torch.mean(torch.mean(weights_after_softmax, dim=0) / torch.max(weights_after_softmax, dim=0)[0])).item()
+        #             )
+        #     return(np.mean(meanW_to_maxW_perLayer))
+
+            # weights_after_softmax = F.softmax(model.layers[layer_id].w, dim=0)
+            # torch.mean(weights_after_softmax, dim=0, keepdim=True)
+
+#---------------------------------------------------------------------------------------
+
+        # if train_acc_diff*100 > 3.:
+        #     CONNECTION_REGULARIZATION = 1.1 * CONNECTION_REGULARIZATION
+        #     log(f"INC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}")
+        # else:
+        #     CONNECTION_REGULARIZATION = CONNECTION_REGULARIZATION / 1.1
+        #     log(f"DEC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}")
+
+        # val_loss, val_acc = validate()
+        # _, bin_val_acc = validate(model=model_binarized)
+        # # log(f"EPOCH={current_epoch}/{EPOCHS} VAL loss={val_loss:.3f} acc={val_acc*100:.2f}%")
+        # log(f"EPOCH={current_epoch}/{EPOCHS} BIN VAL acc={bin_val_acc*100:.2f}%,   val_acc_diff={val_acc*100-bin_val_acc*100:.2f}%")
 
         WANDB_KEY and wandb.log({"epoch": current_epoch, 
             "train_loss": train_loss, "train_acc": train_acc*100,
-            "val_loss": val_loss, "val_acc": val_acc*100,
+            # "val_loss": val_loss, "val_acc": val_acc*100,
             "bin_train_acc": bin_train_acc*100, "train_acc_diff": train_acc*100-bin_train_acc*100,
-            "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
+            # "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
+             "top1w":top1w, "top2w":top2w, "top4w":top4w, "top8w":top8w,
+             "top1c":top1c, "top2c":top2c, "top4c":top4c, "top8c":top8c,
             })
 
 
@@ -576,12 +659,12 @@ model_filename = (
     f"_seed{SEED}_epochs{EPOCHS}_{len(NET_ARCHITECTURE)}x{NET_ARCHITECTURE[0]}"
     f"_b{BATCH_SIZE}_lr{LEARNING_RATE * 1000:.0f}.pth"
 )
-# torch.save(model.state_dict(), model_filename) #!!!
+torch.save(model.state_dict(), model_filename) #!!!
 log(f"Saved to {model_filename}")
 
 WANDB_KEY and wandb.log({
             "final_train_loss": train_loss, "final_train_acc": train_acc*100,
-            "final_val_loss": val_loss, "final_val_acc": val_acc*100,
+            # "final_val_loss": val_loss, "final_val_acc": val_acc*100,
             "final_test_loss": test_loss, "final_test_acc": test_acc*100,
             "final_bin_test_loss": bin_test_loss, "final_bin_test_acc": bin_test_acc*100,
     })

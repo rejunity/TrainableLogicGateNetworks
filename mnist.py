@@ -417,7 +417,7 @@ def l1_maxOnly_regularization(weights_after_softmax):
 
 def l1_topk(weights_after_softmax, k=5): # similar to l1_maxOnly_regularization but goes to 1 when binarized
     # assert len(weights_after_softmax.shape) == 2
-    normalization_factor = (weights_after_softmax.shape[0]-k)/weights_after_softmax.shape[0] * weights_after_softmax.shape[1] # in case of a uniform tensor
+    normalization_factor = (weights_after_softmax.shape[0]-k)/weights_after_softmax.shape[0] * torch.prod(torch.tensor(weights_after_softmax.shape[1:])) # in case of a uniform tensor
     top_k_values, _ = torch.topk(weights_after_softmax, k, dim=0)
     top_k_sum = top_k_values.sum(dim=0, keepdim=True)
     non_top_k_sum = (1 - top_k_sum).sum()
@@ -508,14 +508,14 @@ for i in range(TRAINING_STEPS):
         for layer in model.layers:
             # const_regularization_loss += const_regularization(F.softmax(layer.w, dim=0)) #!!!
             passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
-            # connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))  #!!!
-            # gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0)) #!!!
+            connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))  #!!!
+            gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0)) #!!!
         
         # const_regularization_loss = const_regularization_loss / len(model.layers) #!!!
         # passthrough_regularization_loss = passthrough_regularization_loss / len(model.layers) #!!!
-        # connection_regularization_loss = CONNECTION_REGULARIZATION * connection_regularization_loss / len(model.layers)
-        gate_weight_regularization_loss = gate_weight_regularization_loss / len(model.layers)
-        regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss +  connection_regularization_loss + GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss #!!!
+        connection_regularization_loss = CONNECTION_REGULARIZATION * connection_regularization_loss / len(model.layers)
+        gate_weight_regularization_loss = GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss / len(model.layers)
+        regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss +  connection_regularization_loss + gate_weight_regularization_loss #!!!
         regularization_loss = (1 - LOSS_CE_STRENGTH) * regularization_loss
         
         loss = loss_ce + regularization_loss
@@ -552,7 +552,6 @@ for i in range(TRAINING_STEPS):
             top2w = torch.tensor(0., device=device)
             top4w = torch.tensor(0., device=device)
             top8w = torch.tensor(0., device=device)
-
             top1c = torch.tensor(0., device=device)
             top2c = torch.tensor(0., device=device)
             top4c = torch.tensor(0., device=device)
@@ -568,7 +567,6 @@ for i in range(TRAINING_STEPS):
                 top2c += l1_topk(weights_after_softmax,k=2)
                 top4c += l1_topk(weights_after_softmax,k=4)
                 top8c += l1_topk(weights_after_softmax,k=8)
-
             top1w /= len(model.layers)
             top2w /= len(model.layers)
             top4w /= len(model.layers)
@@ -577,6 +575,8 @@ for i in range(TRAINING_STEPS):
             top2c /= len(model.layers)
             top4c /= len(model.layers)
             top8c /= len(model.layers)
+            # import IPython
+            # IPython.embed()
             # log(f"top1w={top1w},top2w={top2w},top4w={top4w},top8w={top8w}")
             # log(f"top1c={top1c},top2c={top2c},top4c={top4c},top8c={top8c}")
 
@@ -609,12 +609,47 @@ for i in range(TRAINING_STEPS):
 
 #---------------------------------------------------------------------------------------
 
-        # if train_acc_diff*100 > 3.:
-        #     CONNECTION_REGULARIZATION = 1.1 * CONNECTION_REGULARIZATION
+        regularization_cap = 1_000_000.*current_epoch/EPOCHS
+        log(f"regularization_cap={regularization_cap:.0f}")
+        
+        if train_acc_diff * 100. > 1.:
+            log(f"train_acc_diff={train_acc_diff*100:.2f}% > 1%")
+            CONNECTION_REGULARIZATION = 1.05 * CONNECTION_REGULARIZATION
+            if CONNECTION_REGULARIZATION > regularization_cap:
+                CONNECTION_REGULARIZATION = regularization_cap
+            
+            GATE_WEIGHT_REGULARIZATION = 1.05 * GATE_WEIGHT_REGULARIZATION
+            if GATE_WEIGHT_REGULARIZATION > regularization_cap:
+                GATE_WEIGHT_REGULARIZATION = regularization_cap
+
+            log(f"INC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}, GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
+        else:
+            log(f"train_acc_diff={train_acc_diff*100:.2f}% < 1%")
+            CONNECTION_REGULARIZATION = CONNECTION_REGULARIZATION / 1.1
+            GATE_WEIGHT_REGULARIZATION = GATE_WEIGHT_REGULARIZATION / 1.1
+            log(f"DEC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}, GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
+
+        # REGULARIZE USING TOP1C/W----------------------------------------------------
+        # log(f"cPID: {(1.-top1c)*100:.2f}% vs 1.0%")
+        # if (1.-top1c)*100 > 1.0:
+        #     CONNECTION_REGULARIZATION = 1.05 * CONNECTION_REGULARIZATION
+        #     if CONNECTION_REGULARIZATION > regularization_cap:
+        #         CONNECTION_REGULARIZATION = regularization_cap
         #     log(f"INC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}")
         # else:
         #     CONNECTION_REGULARIZATION = CONNECTION_REGULARIZATION / 1.1
         #     log(f"DEC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}")
+
+        # log(f"wPID: {(1.-top1w)*100:.2f}% vs 1.0%")
+        # if (1.-top1w)*100 > 1.0:
+        #     GATE_WEIGHT_REGULARIZATION = 1.075 * GATE_WEIGHT_REGULARIZATION
+        #     if GATE_WEIGHT_REGULARIZATION > regularization_cap:
+        #         GATE_WEIGHT_REGULARIZATION = regularization_cap
+        #     log(f"INC GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
+        # else:
+        #     GATE_WEIGHT_REGULARIZATION = GATE_WEIGHT_REGULARIZATION / 1.1
+        #     log(f"DEC GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
+        #------------------------------------------------------------------------------
 
         # val_loss, val_acc = validate()
         # _, bin_val_acc = validate(model=model_binarized)

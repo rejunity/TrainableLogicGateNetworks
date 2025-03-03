@@ -382,8 +382,9 @@ def get_binarized_model(model=None, bin_value=1): #!!!
 def l1_maxOnly_regularization(weights_after_softmax):
     max_values, _ = torch.max(weights_after_softmax, dim=0, keepdim=True)
     non_max_sum = (1 - max_values).sum()
-    largest_possible_sum = torch.prod(torch.tensor(weights_after_softmax.shape[1:])) # when all elements are uniform; cutting out 0 dim since it is maxxed over
-    return non_max_sum / largest_possible_sum # uniform distribution gives 1 per layer
+    # largest_possible_sum = torch.prod(torch.tensor(weights_after_softmax.shape[1:])) # when all elements are uniform; cutting out 0 dim since it is maxxed over
+    # return non_max_sum / largest_possible_sum # uniform distribution gives 1 per layer
+    return non_max_sum #!!! removing normalization to check if this perhaps trains better
 
 def l1_topk(weights_after_softmax, k=5): # similar to l1_maxOnly_regularization but goes to 1 when binarized
     # assert len(weights_after_softmax.shape) == 2
@@ -551,8 +552,10 @@ for i in range(TRAINING_STEPS):
             top2c /= len(model.layers)
             top4c /= len(model.layers)
             top8c /= len(model.layers)
-            # import IPython
-            # IPython.embed()
+
+            # if current_epoch == 300:
+            #     import IPython
+            #     IPython.embed()
             # log(f"top1w={top1w},top2w={top2w},top4w={top4w},top8w={top8w}")
             # log(f"top1c={top1c},top2c={top2c},top4c={top4c},top8c={top8c}")
 
@@ -585,7 +588,7 @@ for i in range(TRAINING_STEPS):
 
 #---------------------------------------------------------------------------------------
 
-        regularization_cap = 1_000_000.*current_epoch/EPOCHS
+        regularization_cap = 100.*current_epoch/EPOCHS
         log(f"regularization_cap={regularization_cap:.0f}")
         
         if train_acc_diff * 100. > 1.:

@@ -70,12 +70,17 @@ CONNECTION_REGULARIZATION = float(config.get("CONNECTION_REGULARIZATION", 5.))
 GATE_WEIGHT_REGULARIZATION = float(config.get("GATE_WEIGHT_REGULARIZATION", 1.))
 LOSS_CE_STRENGTH = float(config.get("LOSS_CE_STRENGTH", 0.9))
 
+PID_P = float(config.get("PID_P", 1.))
+PID_I = float(config.get("PID_I", 0.))
+PID_D = float(config.get("PID_D", 0.))
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "NET_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "CONST_REGULARIZATION",
-               "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH"]
+               "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH",
+               "PID_P", "PID_I", "PID_D"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
 # Making sure sensitive configs are not logged
@@ -436,6 +441,15 @@ def const_regularization(weights_after_softmax):
     total_weight = weights_after_softmax.sum()
     return const_weight / total_weight
 
+def pid_controller(value, target=1, prev_error=0, prev_integral=0, kp=PID_P, ki=PID_I, kd=PID_D):
+    error = target - value
+    integral = prev_integral + error
+    derivative = (error - prev_error)
+    control = kp * error + ki * integral + kd * derivative
+    log(f"ki*integral={ki*integral:.4f}")
+    log(f"kd*derivative={kd*derivative:.4f}")
+    return control, error, integral
+
 ### TRAIN ###
 
 validate = get_validate(model)
@@ -455,6 +469,7 @@ log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
 time_start = time.time()
 
+control, error, integral = 0., 0., 0. # PID init
 
 for i in range(TRAINING_STEPS):
     # if i == TRAINING_STEPS // 3:
@@ -496,8 +511,10 @@ for i in range(TRAINING_STEPS):
     with torch.set_grad_enabled(True):
         # !!! hard remove const
         for l in model.layers:
-            for const_gate_ix in [0,15]:
-                l.w.data[const_gate_ix, :] = 0
+            # for const_gate_ix in [0,15]:
+                # l.w.data[const_gate_ix, :] = 0
+            for pass_gate_ix in [3, 5, 10, 12]:
+                l.w.data[pass_gate_ix, :] = 0
 
         model_output = model(x)
         loss_ce = F.cross_entropy(model_output, y) * LOSS_CE_STRENGTH
@@ -506,11 +523,11 @@ for i in range(TRAINING_STEPS):
         gate_weight_regularization_loss = 0
         passthrough_regularization_loss = 0
         const_regularization_loss = 0
-        for layer in model.layers:
+        # for layer in model.layers:
             # const_regularization_loss += const_regularization(F.softmax(layer.w, dim=0)) #!!!
-            passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
-            connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))  #!!!
-            gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0)) #!!!
+            # passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
+            # connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))  #!!!
+            # gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0)) #!!!
         
         # const_regularization_loss = const_regularization_loss / len(model.layers) #!!!
         # passthrough_regularization_loss = passthrough_regularization_loss / len(model.layers) #!!!
@@ -612,36 +629,35 @@ for i in range(TRAINING_STEPS):
 
 #---------------------------------------------------------------------------------------
 
-        regularization_cap = 100.*current_epoch/EPOCHS
-        log(f"regularization_cap={regularization_cap:.0f}")
+        # regularization_cap = 100.*current_epoch/EPOCHS
+        # log(f"regularization_cap={regularization_cap:.0f}")
         
-        if train_acc_diff * 100. > 1.:
-            log(f"train_acc_diff={train_acc_diff*100:.2f}% > 1%")
-            CONNECTION_REGULARIZATION = 1.05 * CONNECTION_REGULARIZATION
-            if CONNECTION_REGULARIZATION > regularization_cap:
-                CONNECTION_REGULARIZATION = regularization_cap
-            
-            GATE_WEIGHT_REGULARIZATION = 1.05 * GATE_WEIGHT_REGULARIZATION
-            if GATE_WEIGHT_REGULARIZATION > regularization_cap:
-                GATE_WEIGHT_REGULARIZATION = regularization_cap
-
-            log(f"INC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}, GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
-        else:
-            log(f"train_acc_diff={train_acc_diff*100:.2f}% < 1%")
-            CONNECTION_REGULARIZATION = CONNECTION_REGULARIZATION / 1.1
-            GATE_WEIGHT_REGULARIZATION = GATE_WEIGHT_REGULARIZATION / 1.1
-            log(f"DEC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}, GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
-
-        # REGULARIZE USING TOP1C/W----------------------------------------------------
-        # log(f"cPID: {(1.-top1c)*100:.2f}% vs 1.0%")
-        # if (1.-top1c)*100 > 1.0:
+        # if train_acc_diff * 100. > 1.:
+        #     log(f"train_acc_diff={train_acc_diff*100:.2f}% > 1%")
         #     CONNECTION_REGULARIZATION = 1.05 * CONNECTION_REGULARIZATION
         #     if CONNECTION_REGULARIZATION > regularization_cap:
         #         CONNECTION_REGULARIZATION = regularization_cap
-        #     log(f"INC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}")
+            
+        #     GATE_WEIGHT_REGULARIZATION = 1.05 * GATE_WEIGHT_REGULARIZATION
+        #     if GATE_WEIGHT_REGULARIZATION > regularization_cap:
+        #         GATE_WEIGHT_REGULARIZATION = regularization_cap
+
+        #     log(f"INC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}, GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
         # else:
+        #     log(f"train_acc_diff={train_acc_diff*100:.2f}% < 1%")
         #     CONNECTION_REGULARIZATION = CONNECTION_REGULARIZATION / 1.1
-        #     log(f"DEC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}")
+        #     GATE_WEIGHT_REGULARIZATION = GATE_WEIGHT_REGULARIZATION / 1.1
+        #     log(f"DEC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}, GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
+
+        # REGULARIZE USING TOP1C/W----------------------------------------------------
+        # def pid_controller(value, target=1, previous_error=0, integral=0, kp=1, ki=0, kd=0):
+        # if current_epoch > 5.:
+        #     # control, error, integral = pid_controller(top1c.item(), prev_error=error, prev_integral=integral)
+        #     control, error, integral = pid_controller(-train_acc_diff, target=0., prev_error=error, prev_integral=integral)
+        #     CONNECTION_REGULARIZATION = min(1_000, max(0,control) * 1_000)
+        #     # log(f"cPID: value={top1c*100:.2f}%, control={control:.2f}, error={error:.2f}, integral={integral:.2f}")
+        #     log(f"cPID: value={train_acc_diff*100:.2f}%, control={control:.2f}, error={error:.2f}, integral={integral:.2f}")
+        #     log(f"CONNECTION_REGULARIZATION={CONNECTION_REGULARIZATION:.0f}")
 
         # log(f"wPID: {(1.-top1w)*100:.2f}% vs 1.0%")
         # if (1.-top1w)*100 > 1.0:
@@ -666,6 +682,7 @@ for i in range(TRAINING_STEPS):
             # "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
              "top1w":top1w, "top2w":top2w, "top4w":top4w, "top8w":top8w,
              "top1c":top1c, "top2c":top2c, "top4c":top4c, "top8c":top8c,
+             "control":control, "error":error, "integral":integral,
             })
 
 

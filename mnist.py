@@ -79,6 +79,7 @@ TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
 
 SUPPRESS_PASSTHROUGH = config.get("SUPPRESS_PASSTHROUGH", "0").lower() in ("true", "1", "yes")
+TENSION_REGULARIZATION = float(config.get("TENSION_REGULARIZATION", -1))
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
@@ -86,7 +87,8 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "CONST_REGULARIZATION",
                "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH",
-               "PID_P", "PID_I", "PID_D", "SUPPRESS_PASSTHROUGH"]
+               "PID_P", "PID_I", "PID_D", 
+               "SUPPRESS_PASSTHROUGH", "TENSION_REGULARIZATION",]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
 # Making sure sensitive configs are not logged
@@ -519,10 +521,11 @@ for i in range(TRAINING_STEPS):
         
         tension_loss = 0
         for layer in model.layers:
-            conn_weights_after_softmax = F.softmax(layer.c, dim=0)
-            tension_loss += torch.sum((1 - conn_weights_after_softmax) * conn_weights_after_softmax)
-            gate_weights_after_softmax = F.softmax(layer.w, dim=0)
-            tension_loss += torch.sum((1 - gate_weights_after_softmax) * gate_weights_after_softmax)
+            if TENSION_REGULARIZATION > 0:
+                conn_weights_after_softmax = F.softmax(layer.c, dim=0)
+                tension_loss += torch.sum((1 - conn_weights_after_softmax) * conn_weights_after_softmax)
+                gate_weights_after_softmax = F.softmax(layer.w, dim=0)
+                tension_loss += torch.sum((1 - gate_weights_after_softmax) * gate_weights_after_softmax)
 
             # const_regularization_loss += const_regularization(F.softmax(layer.w, dim=0)) #!!!
             # passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
@@ -537,8 +540,8 @@ for i in range(TRAINING_STEPS):
         # regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss +  connection_regularization_loss + gate_weight_regularization_loss #!!!
         # regularization_loss = (1 - LOSS_CE_STRENGTH) * regularization_loss
         
-        equal_factor = 1. / 620. * 1.465 / 10_000_000. # such that CE loss equals 0.001% reg loss at the end
-        regularization_loss = tension_loss * equal_factor * (float(i) / float(TRAINING_STEPS))
+        # equal_factor = 1. / 620. * 1.465 / 10_000_000. # such that CE loss equals 0.001% reg loss at the end
+        regularization_loss = tension_loss * TENSION_REGULARIZATION * (float(i) / float(TRAINING_STEPS))
 
         loss = loss_ce + regularization_loss
         loss.backward()

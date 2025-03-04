@@ -78,12 +78,15 @@ TENSION_REGULARIZATION = float(config.get("TENSION_REGULARIZATION", -1))
 PROFILE = config.get("PROFILE", "0").lower() in ("true", "1", "yes")
 if PROFILE: prof = torch.profiler.profile(schedule=torch.profiler.schedule(skip_first=10, wait=3, warmup=1, active=1, repeat=1000), record_shapes=True, with_flops=True) #, with_stack=True, with_modules=True)
 
+FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE",
-               "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION", "PROFILE"]
+               "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
+               "PROFILE", "FORCE_CPU"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
 # Making sure sensitive configs are not logged
@@ -135,9 +138,10 @@ if WANDB_KEY is None:
 ############################ DEVICE ########################
 
 try:
-    device = torch.device("cuda" if torch.cuda.is_available() else 
-                      "mps" if torch.backends.mps.is_available() else 
-                      "cpu")
+    device = torch.device(
+                    "cuda" if torch.cuda.is_available()         and not FORCE_CPU else 
+                    "mps"  if torch.backends.mps.is_available() and not FORCE_CPU else 
+                    "cpu")
 except:
     device = "cpu"
 WANDB_KEY and wandb.log({"device": str(device)})

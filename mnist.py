@@ -78,16 +78,20 @@ PID_D = float(config.get("PID_D", 0.))
 TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
 
+SUPPRESS_PASSTHROUGH = config.get("SUPPRESS_PASSTHROUGH", "0").lower() in ("true", "1", "yes")
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "NET_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "CONST_REGULARIZATION",
                "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH",
-               "PID_P", "PID_I", "PID_D"]
+               "PID_P", "PID_I", "PID_D", "SUPPRESS_PASSTHROUGH"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
 # Making sure sensitive configs are not logged
+assert "TG_TOKEN" not in config_printout_dict.keys()
+assert "TG_CHATID" not in config_printout_dict.keys()
 assert "PAPERTRAIL_HOST" not in config_printout_dict.keys()
 assert "PAPERTRAIL_PORT" not in config_printout_dict.keys()
 assert "WANDB_KEY" not in config_printout_dict.keys()
@@ -501,9 +505,9 @@ for i in range(TRAINING_STEPS):
         for l in model.layers:
             # for const_gate_ix in [0,15]:
                 # l.w.data[const_gate_ix, :] = 0
-            for pass_gate_ix in [3, 5, 10, 12]:
-                l.w.data[pass_gate_ix, :] = 0
-            pass
+            if SUPPRESS_PASSTHROUGH:
+                for pass_gate_ix in [3, 5, 10, 12]:
+                    l.w.data[pass_gate_ix, :] = 0
 
         model_output = model(x)
         loss_ce = F.cross_entropy(model_output, y) * LOSS_CE_STRENGTH

@@ -519,10 +519,10 @@ for i in range(TRAINING_STEPS):
         
         tension_loss = 0
         for layer in model.layers:
-            # conn_weights_after_softmax = F.softmax(layer.c, dim=0)
-            # tension_loss += torch.sum((1 - conn_weights_after_softmax) * conn_weights_after_softmax)
-            # gate_weights_after_softmax = F.softmax(layer.w, dim=0)
-            # tension_loss += torch.sum((1 - gate_weights_after_softmax) * gate_weights_after_softmax)
+            conn_weights_after_softmax = F.softmax(layer.c, dim=0)
+            tension_loss += torch.sum((1 - conn_weights_after_softmax) * conn_weights_after_softmax)
+            gate_weights_after_softmax = F.softmax(layer.w, dim=0)
+            tension_loss += torch.sum((1 - gate_weights_after_softmax) * gate_weights_after_softmax)
 
             # const_regularization_loss += const_regularization(F.softmax(layer.w, dim=0)) #!!!
             # passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
@@ -537,7 +537,7 @@ for i in range(TRAINING_STEPS):
         # regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss +  connection_regularization_loss + gate_weight_regularization_loss #!!!
         # regularization_loss = (1 - LOSS_CE_STRENGTH) * regularization_loss
         
-        equal_factor = 1. / 620. * 1.465 / 1_000_000. # such that CE loss equals 0.001% reg loss at the end
+        equal_factor = 1. / 620. * 1.465 / 10_000_000. # such that CE loss equals 0.001% reg loss at the end
         regularization_loss = tension_loss * equal_factor * (float(i) / float(TRAINING_STEPS))
 
         loss = loss_ce + regularization_loss
@@ -728,9 +728,6 @@ WANDB_KEY and wandb.log({
 
 from telegram import Bot
 import asyncio
-async def send_message():
-    bot = Bot(token=TG_TOKEN)
-    await bot.send_message(chat_id=int(TG_CHATID), text=f"{LOG_NAME}_{SEED}")
-(TG_TOKEN and TG_CHATID) and asyncio.run(send_message())
+(TG_TOKEN and TG_CHATID) and asyncio.run(Bot(token=TOKEN).send_message(chat_id=int(TG_CHATID), text=f"{LOG_NAME}_{SEED}"))
 
 WANDB_KEY and wandb.finish()

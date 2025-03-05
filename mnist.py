@@ -704,7 +704,8 @@ for i in range(TRAINING_STEPS):
 
 
 time_end = time.time()
-log(f"Training took {time_end - time_start:.2f} seconds, per iteration: {(time_end - time_start) / TRAINING_STEPS * 1000:.2f} milliseconds")
+training_total_time = time_end - time_start 
+log(f"Training took {training_total_time:.2f} seconds, per iteration: {(training_total_time) / TRAINING_STEPS * 1000:.2f} milliseconds")
 
 test_loss, test_acc = validate('test')
 log(f"TEST loss={test_loss:.3f} acc={test_acc*100:.2f}%")
@@ -730,6 +731,7 @@ WANDB_KEY and wandb.log({
             # "final_val_loss": val_loss, "final_val_acc": val_acc*100,
             "final_test_loss": test_loss, "final_test_acc": test_acc*100,
             "final_bin_test_loss": bin_test_loss, "final_bin_test_acc": bin_test_acc*100,
+            "training_total_time": training_total_time,
     })
 
 from telegram import Bot

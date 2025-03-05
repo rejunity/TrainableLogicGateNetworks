@@ -153,11 +153,12 @@ WANDB_KEY and wandb.log({"device": str(device)})
 ############################ MODEL ########################
 
 class LearnableGate16Array(nn.Module):
-    def __init__(self, number_of_gates, number_of_inputs, name):
+    def __init__(self, number_of_gates, number_of_inputs, name, wiring_offset):
         super(LearnableGate16Array, self).__init__()
         self.number_of_gates = number_of_gates
         self.number_of_inputs = number_of_inputs
         self.name = name
+        self.wiring_offset = wiring_offset
         self.w = nn.Parameter(torch.zeros((16, number_of_gates), dtype=torch.float32)) # [16, W]
         self.zeros = torch.empty(0)
         self.ones = torch.empty(0)
@@ -171,25 +172,25 @@ class LearnableGate16Array(nn.Module):
 
     def forward(self, x):
         batch_size = x.shape[0]
-        connections = F.softmax(self.c, dim=0) if not self.binarized else self.c
-        # [batch_size, number_of_inputs] x [number_of_inputs, number_of_gates*2] -> [batch_size, number_of_gates*2]
+        connections = F.softmax(self.c, dim=0) if not self.binarized else self.c # [number_of_inputs, number_of_gates, 2]
+        # [batch_size, number_of_inputs] * [number_of_inputs, number_of_gates*2] -> [batch_size, number_of_gates*2]
         x = torch.matmul(x, connections.view(self.number_of_inputs, self.number_of_gates*2))
-        x = x.view(batch_size, self.number_of_gates, 2)
+        x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
 
-        A = x[:,:,0]
-        A = A.transpose(0,1)
-        B = x[:,:,1]
-        B = B.transpose(0,1)
+        A = x[:,:,0]          # [batch_size, number_of_gates]
+        A = A.transpose(0,1)  # [number_of_gates, batch_size]
+        B = x[:,:,1]          # [batch_size, number_of_gates]
+        B = B.transpose(0,1)  # [number_of_gates, batch_size]
 
         if self.zeros.shape != A.shape:
-            self.zeros = torch.zeros_like(A)
+            self.zeros = torch.zeros_like(A) # [number_of_gates, batch_size]
         if self.ones.shape != A.shape:
-            self.ones = torch.ones_like(A)
+            self.ones = torch.ones_like(A)   # [number_of_gates, batch_size]
             
         # Numbered according to https://arxiv.org/pdf/2210.08277 table
-        AB = A*B
+        AB = A*B # [number_of_gates, batch_size]*[number_of_gates, batch_size] -> [number_of_gates, batch_size]
 
-        g0  = self.zeros
+        g0  = self.zeros # all of g ~ [number_of_gates, batch_size]
         g1  = AB
         g2  = A - AB
         g3  = A
@@ -206,11 +207,11 @@ class LearnableGate16Array(nn.Module):
         g14 = self.ones - AB
         g15 = self.ones
 
-        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w
+        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w # [16, number_of_gates]
         gates = torch.stack([
             g0, g1, g2, g3, g4, g5, g6, g7,
             g8, g9, g10, g11, g12, g13, g14, g15
-            ], dim=0)
+            ], dim=0) # [C, number_of_gates, N]
         assert gates.dim() > 1
         if gates.dim() == 2:
             gates = gates.unsqueeze(dim=1)                    # broadcast [C,N] -> [C,1,N]; C=16, N=batch_size
@@ -240,6 +241,60 @@ class Model(nn.Module):
             else:
                 layers_.append(LearnableGate16Array(number_of_gates=layer_gates,number_of_inputs=prev_gates, name=layer_idx))
             prev_gates = layer_gates
+        self.layers = nn.ModuleList(layers_)
+
+    def forward(self, X):
+        for layer_idx in range(0, len(self.layers)):
+            X = self.layers[layer_idx](X)
+
+        X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
+        X = F.softmax(X, dim=-1)
+        return X
+
+    def get_passthrough_fraction(self):
+        pass_fraction_array = torch.zeros(len(self.layers), dtype=torch.float32, device=device)
+        indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
+        for layer_ix, layer in enumerate(self.layers):
+            weights_after_softmax = F.softmax(layer.w, dim=0)
+            pass_weight = (weights_after_softmax[indices, :]).sum()
+            total_weight = weights_after_softmax.sum()
+            pass_fraction_array[layer_ix] = pass_weight / total_weight
+        return pass_fraction_array
+    
+    def compute_selected_gates_fraction(self, selected_gates):
+        gate_fraction_array = torch.zeros(len(self.layers), dtype=torch.float32, device=device)
+        indices = torch.tensor(selected_gates, dtype=torch.long)
+        for layer_ix, layer in enumerate(self.layers):
+            weights_after_softmax = F.softmax(layer.w, dim=0)
+            pass_weight = (weights_after_softmax[indices, :]).sum()
+            total_weight = weights_after_softmax.sum()
+            gate_fraction_array[layer_ix] = pass_weight / total_weight
+        return torch.mean(gate_fraction_array).item()
+    
+class ModelRestricted(nn.Module):
+    def __init__(self, seed, net_architecture, number_of_categories, input_size):
+        super(ModelRestricted, self).__init__()
+        # net_architecture = [1216, 32*38]
+        net_architecture = [64, 32*2]
+        self.net_architecture = net_architecture
+        self.first_layer_gates = self.net_architecture[0]
+        self.last_layer_gates = self.net_architecture[-1]
+        self.number_of_categories = number_of_categories
+        self.input_size = input_size
+        self.seed = seed
+        random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        
+        self.outputs_per_category = self.last_layer_gates // self.number_of_categories
+        # assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
+
+        layers_ = []
+        # from 256 input to 64 # 1216
+        layers_.append(LearnableGate16Array(number_of_gates=64, number_of_inputs=256, name=0, wiring_offset=0))
+
+        for i in range(0,2): # 38
+            layers_.append(LearnableGate16Array(number_of_gates=32, number_of_inputs=64, name=f"r_1_{i}", wiring_offset=32*i))
+
         self.layers = nn.ModuleList(layers_)
 
     def forward(self, X):
@@ -451,11 +506,13 @@ def pid_controller(value, target=1, prev_error=0, prev_integral=0, kp=PID_P, ki=
 
 ### INSTANTIATE THE MODEL AND MOVE TO GPU ###
 
-model = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+model = ModelRestricted(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+import IPython
+IPython.embed()
+
 #!!!
 # model = Model(seed=SEED, net_architecture=[NET_ARCHITECTURE[0]], number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
 validate = get_validate(model)
-
 ### TRAIN ###
 
 val_loss, val_accuracy = validate(dataset="val")

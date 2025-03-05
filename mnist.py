@@ -37,7 +37,7 @@ import wandb
 from dotenv import dotenv_values
 config = { **dotenv_values(".env"), **os.environ }
 
-LOG_NAME = config.get("LOG_NAME", "MNIST")
+LOG_TAG = config.get("LOG_TAG", "MNIST")
 TIMEZONE = config.get("TIMEZONE", "UTC")
 PAPERTRAIL_HOST = config.get("PAPERTRAIL_HOST")
 PAPERTRAIL_PORT = config.get("PAPERTRAIL_PORT")
@@ -55,6 +55,7 @@ ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true
 SEED = config.get("SEED", random.randint(0, 1024*1024))
 if SEED < 0:
     SEED = random.randint(0, 1000_000)
+LOG_NAME = f"{LOG_TAG}_{SEED}"
 NET_ARCHITECTURE = [int(l) for l in config.get("NET_ARCHITECTURE", "[1300,1300,1300]")[1:-1].split(',')]
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
@@ -80,6 +81,7 @@ TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
 
 SUPPRESS_PASSTHROUGH = config.get("SUPPRESS_PASSTHROUGH", "0").lower() in ("true", "1", "yes")
+SUPPRESS_CONST = config.get("SUPPRESS_CONST", "0").lower() in ("true", "1", "yes")
 TENSION_REGULARIZATION = float(config.get("TENSION_REGULARIZATION", -1))
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
@@ -89,7 +91,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "CONST_REGULARIZATION",
                "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH",
                "PID_P", "PID_I", "PID_D", 
-               "SUPPRESS_PASSTHROUGH", "TENSION_REGULARIZATION",]
+               "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
 # Making sure sensitive configs are not logged
@@ -101,7 +103,7 @@ assert "WANDB_KEY" not in config_printout_dict.keys()
 
 if WANDB_KEY is not None:
     wandb.login(key=WANDB_KEY)
-    wandb_run = wandb.init(project=WANDB_PROJECT, name=f"{LOG_NAME}_{SEED}", config=config_printout_dict)
+    wandb_run = wandb.init(project=WANDB_PROJECT, name=LOG_NAME, config=config_printout_dict)
     script_path = os.path.abspath(__file__)
     artifact = wandb.Artifact("source_code", type="code")
     artifact.add_file(script_path)
@@ -109,7 +111,7 @@ if WANDB_KEY is not None:
 
 ############################ LOG ########################
 
-def create_papertrail_logger(log_name, timezone, papertrail_host, papertrail_port):
+def create_papertrail_logger(log_tag, timezone, papertrail_host, papertrail_port):
     def papertrail(message):
         timestamp = datetime.now(ZoneInfo(timezone))
         if (papertrail_host is not None) and (papertrail_port is not None):
@@ -119,7 +121,7 @@ def create_papertrail_logger(log_name, timezone, papertrail_host, papertrail_por
                     hostname = ""
                     syslog_message = (
                         f"<{priority}>{timestamp.strftime('%b %d %H:%M:%S')} "
-                        f"{hostname} {log_name}: {message}"
+                        f"{hostname} {log_tag}: {message}"
                     )
                     sock.sendto(
                         syslog_message.encode("utf-8"),
@@ -130,7 +132,7 @@ def create_papertrail_logger(log_name, timezone, papertrail_host, papertrail_por
         print(f'{timestamp.strftime("%H:%M:%S")} {message}', flush=True)
     return papertrail
 
-log = create_papertrail_logger(LOG_NAME, TIMEZONE, PAPERTRAIL_HOST, PAPERTRAIL_PORT)
+log = create_papertrail_logger(LOG_TAG, TIMEZONE, PAPERTRAIL_HOST, PAPERTRAIL_PORT)
 
 if WANDB_KEY is None:
     log("-"*80)
@@ -522,8 +524,9 @@ for i in range(TRAINING_STEPS):
     with torch.set_grad_enabled(True):
         # !!! hard remove const
         for l in model.layers:
-            # for const_gate_ix in [0,15]:
-                # l.w.data[const_gate_ix, :] = 0
+            if SUPPRESS_CONST:
+                for const_gate_ix in [0,15]:
+                    l.w.data[const_gate_ix, :] = 0
             if SUPPRESS_PASSTHROUGH:
                 for pass_gate_ix in [3, 5, 10, 12]:
                     l.w.data[pass_gate_ix, :] = 0
@@ -579,11 +582,11 @@ for i in range(TRAINING_STEPS):
         current_epoch = (i+1) // EPOCH_STEPS
 
         train_loss, train_acc = validate('train')
-        log(f"EPOCH={current_epoch}/{EPOCHS}     TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
+        log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS}     TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
         model_binarized = get_binarized_model(model)
         _, bin_train_acc = validate(dataset="train", model=model_binarized)
         train_acc_diff = train_acc-bin_train_acc
-        log(f"EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
+        log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
 #---------------------------------------------------------------------------------------
 
 
@@ -757,6 +760,6 @@ WANDB_KEY and wandb.log({
 
 from telegram import Bot
 import asyncio
-(TG_TOKEN and TG_CHATID) and asyncio.run(Bot(token=TG_TOKEN).send_message(chat_id=int(TG_CHATID), text=f"{LOG_NAME}_{SEED}"))
+(TG_TOKEN and TG_CHATID) and asyncio.run(Bot(token=TG_TOKEN).send_message(chat_id=int(TG_CHATID), text=LOG_NAME))
 
 WANDB_KEY and wandb.finish()

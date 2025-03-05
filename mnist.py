@@ -731,6 +731,6 @@ WANDB_KEY and wandb.log({
 
 from telegram import Bot
 import asyncio
-(TG_TOKEN and TG_CHATID) and asyncio.run(Bot(token=TOKEN).send_message(chat_id=int(TG_CHATID), text=f"{LOG_NAME}_{SEED}"))
+(TG_TOKEN and TG_CHATID) and asyncio.run(Bot(token=TG_TOKEN).send_message(chat_id=int(TG_CHATID), text=f"{LOG_NAME}_{SEED}"))
 
 WANDB_KEY and wandb.finish()

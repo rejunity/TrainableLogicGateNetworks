@@ -260,6 +260,15 @@ class Model(nn.Module):
             pass_fraction_array[layer_ix] = pass_weight / total_weight
         return pass_fraction_array
     
+    def compute_selected_gates_fraction(self, selected_gates):
+        gate_fraction_array = torch.zeros(len(self.layers), dtype=torch.float32, device=device)
+        indices = torch.tensor(selected_gates, dtype=torch.long)
+        for layer_ix, layer in enumerate(self.layers):
+            weights_after_softmax = F.softmax(layer.w, dim=0)
+            pass_weight = (weights_after_softmax[indices, :]).sum()
+            total_weight = weights_after_softmax.sum()
+            gate_fraction_array[layer_ix] = pass_weight / total_weight
+        return torch.mean(gate_fraction_array).item()
 
 ############################ DATA ########################
 
@@ -700,6 +709,13 @@ for i in range(TRAINING_STEPS):
              "top1w":top1w, "top2w":top2w, "top4w":top4w, "top8w":top8w,
              "top1c":top1c, "top2c":top2c, "top4c":top4c, "top8c":top8c,
              "control":control, "error":error, "integral":integral,
+             "gate_perc_pass": model.compute_selected_gates_fraction([3, 5, 10, 12])*100.,
+             "gate_perc_const": model.compute_selected_gates_fraction([0, 15])*100.,
+             "gate_perc_and": model.compute_selected_gates_fraction([1, 14])*100.,
+             "gate_perc_aImplies": model.compute_selected_gates_fraction([2, 13])*100.,
+             "gate_perc_bImplies": model.compute_selected_gates_fraction([4, 11])*100.,
+             "gate_perc_xor": model.compute_selected_gates_fraction([6, 9])*100.,
+             "gate_perc_or": model.compute_selected_gates_fraction([7, 8])*100.,
             })
 
 

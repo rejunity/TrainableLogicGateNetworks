@@ -152,6 +152,91 @@ WANDB_KEY and wandb.log({"device": str(device)})
 
 ############################ MODEL ########################
 
+class LearnableInterconnectBlock(nn.Module):
+    def __init__(self, number_of_inputs, number_of_outputs, name=''):
+        super(LearnableInterconnectBlock, self).__init__()
+        self.number_of_inputs = number_of_inputs
+        self.number_of_outputs = number_of_outputs
+        self.name = name
+        self.binarized = False
+        self.c = nn.Parameter(torch.zeros((number_of_inputs, number_of_outputs), dtype=torch.float32))
+        nn.init.normal_(self.c, mean=0.0, std=1)
+
+    def forward(self, x):
+        # softmax enforces that all wire weights to a particular output pin sum up to 1 while input pin weights differ
+        connections = F.softmax(self.c, dim=0) if not self.binarized else self.c # [number_of_inputs, number_of_gates, 2]        
+        # [batch_size, number_of_inputs] * [number_of_inputs, number_of_outputs] -> [batch_size, number_of_outputs]
+        return torch.matmul(x, connections.view(self.number_of_inputs, self.number_of_outputs))
+    
+class LearnableInterconnectLayer(nn.Module):
+    def __init__(self, layer_inputs, layer_outputs, block_inputs=2, block_outputs=2, name=''):
+        super(LearnableInterconnectLayer, self).__init__()
+        self.layer_inputs = layer_inputs
+        self.layer_outputs = layer_outputs
+        self.block_inputs = block_inputs
+        self.block_outputs = block_outputs
+        self.name = name
+        self.binarized = False
+
+        n_blocks_ = layer_inputs // block_inputs
+        assert n_blocks_ == layer_outputs // block_outputs
+
+        self.blocks = []
+        for block_idx in range(0,n_blocks_):
+            self.blocks.append(LearnableInterconnectBlock(number_of_inputs=self.block_inputs, 
+                                                          number_of_outputs=self.block_inputs, 
+                                                          name=f"{self.name}_{block_idx}"))
+        self.blocks = nn.ModuleList(self.blocks)
+
+    def forward(self, x):
+        x_split = x.split(self.block_inputs, dim=1)
+        return torch.cat([block(chunk) for block, chunk in zip(self.blocks, x_split)], dim=1)
+
+
+class EfficientLearnableInterconnect(nn.Module):
+    def __init__(self, layer_inputs, layer_outputs, block_inputs=2, block_outputs=2, name=''):
+        super(EfficientLearnableInterconnect, self).__init__()
+        self.layer_inputs = layer_inputs
+        self.layer_outputs = layer_outputs
+        self.block_inputs = block_inputs
+        self.block_outputs = block_outputs
+        self.name = name
+        self.binarized = False
+        
+        self.n_blocks = layer_inputs // block_inputs
+        assert self.n_blocks == layer_outputs // block_outputs
+        
+        self.c = nn.Parameter(torch.zeros((self.n_blocks, block_inputs, block_outputs), dtype=torch.float32))
+        nn.init.normal_(self.c, mean=0.0, std=1)
+    
+    def forward(self, x):
+        x_reshaped = x.view(-1, self.n_blocks, self.block_inputs)
+        connections = F.softmax(self.c, dim=1) if not self.binarized else self.c
+        output = torch.einsum('bnm,nmo->bno', x_reshaped, connections)
+        return output.reshape(x.shape[0], self.layer_outputs)
+
+x = torch.tensor( [[0.,0.,0.,0.], [0.,1.,1.,0.], [1.,1.,1.,1.]] )
+li = LearnableInterconnectLayer(4,4)
+eli = EfficientLearnableInterconnect(4,4)
+with torch.no_grad():                                                                                                                                                
+    eli.c[0,:,:].copy_(li.blocks[0].c)
+    eli.c[1,:,:].copy_(li.blocks[1].c)
+
+y = li(x)
+y2 = eli(x)
+print(f"allclose={torch.allclose(y, y2)}")
+
+# import IPython
+# IPython.embed()
+
+# batch = 3, size=2
+# ii = LearnableInterconnectBlock(number_of_inputs=4, number_of_outputs=4, name='first')
+# connections = F.softmax(ii.c, dim=0)
+# x1 = torch.matmul(x, connections)
+this_will_quit()
+
+
+
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, number_of_inputs, name, wiring_offset):
         super(LearnableGate16Array, self).__init__()
@@ -507,8 +592,7 @@ def pid_controller(value, target=1, prev_error=0, prev_integral=0, kp=PID_P, ki=
 ### INSTANTIATE THE MODEL AND MOVE TO GPU ###
 
 model = ModelRestricted(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
-import IPython
-IPython.embed()
+
 
 #!!!
 # model = Model(seed=SEED, net_architecture=[NET_ARCHITECTURE[0]], number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)

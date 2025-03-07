@@ -184,7 +184,7 @@ class LearnableInterconnectLayer(nn.Module):
         self.blocks = []
         for block_idx in range(0,n_blocks_):
             self.blocks.append(LearnableInterconnectBlock(number_of_inputs=self.block_inputs, 
-                                                          number_of_outputs=self.block_inputs, 
+                                                          number_of_outputs=self.block_outputs, 
                                                           name=f"{self.name}_{block_idx}"))
         self.blocks = nn.ModuleList(self.blocks)
 
@@ -214,28 +214,6 @@ class EfficientLearnableInterconnect(nn.Module):
         connections = F.softmax(self.c, dim=1) if not self.binarized else self.c
         output = torch.einsum('bnm,nmo->bno', x_reshaped, connections)
         return output.reshape(x.shape[0], self.layer_outputs)
-
-x = torch.tensor( [[0.,0.,0.,0.], [0.,1.,1.,0.], [1.,1.,1.,1.]] )
-li = LearnableInterconnectLayer(4,4)
-eli = EfficientLearnableInterconnect(4,4)
-with torch.no_grad():                                                                                                                                                
-    eli.c[0,:,:].copy_(li.blocks[0].c)
-    eli.c[1,:,:].copy_(li.blocks[1].c)
-
-y = li(x)
-y2 = eli(x)
-print(f"allclose={torch.allclose(y, y2)}")
-
-# import IPython
-# IPython.embed()
-
-# batch = 3, size=2
-# ii = LearnableInterconnectBlock(number_of_inputs=4, number_of_outputs=4, name='first')
-# connections = F.softmax(ii.c, dim=0)
-# x1 = torch.matmul(x, connections)
-this_will_quit()
-
-
 
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, number_of_inputs, name, wiring_offset):
@@ -493,6 +471,34 @@ for i, (image, label) in enumerate(test_dataset):
 test_labels = torch.nn.functional.one_hot(test_labels_, num_classes=NUMBER_OF_CATEGORIES)
 test_labels = test_labels.type(torch.float32)
 
+#####################################################
+# !!!
+# x = torch.tensor( [[0.,0.,0.,0.], [0.,1.,1.,0.], [1.,1.,1.,1.]] )
+li = LearnableInterconnectLayer(256,2048,block_inputs=4,block_outputs=32)
+eli = EfficientLearnableInterconnect(256,2048,block_inputs=4,block_outputs=32)
+
+# import IPython
+# IPython.embed()
+
+with torch.no_grad():
+    for i in range(0,64):
+        eli.c[i,:,:].copy_(li.blocks[i].c)
+indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
+x = train_images[indices]
+
+y = li(x)
+y2 = eli(x)
+print(f"allclose={torch.allclose(y, y2)}")
+
+# import IPython
+# IPython.embed()
+
+# batch = 3, size=2
+# ii = LearnableInterconnectBlock(number_of_inputs=4, number_of_outputs=4, name='first')
+# connections = F.softmax(ii.c, dim=0)
+# x1 = torch.matmul(x, connections)
+this_will_quit()
+#####################################################
 
 ### VALIDATE ###
 

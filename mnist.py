@@ -272,15 +272,16 @@ class Model(nn.Module):
                 pass_fraction_array.append(pass_weight / total_weight)
         return pass_fraction_array
     
-    # def compute_selected_gates_fraction(self, selected_gates):
-    #     gate_fraction_array = torch.zeros(len(self.layers), dtype=torch.float32, device=device)
-    #     indices = torch.tensor(selected_gates, dtype=torch.long)
-    #     for layer_ix, layer in enumerate(self.layers):
-    #         weights_after_softmax = F.softmax(layer.w, dim=0)
-    #         pass_weight = (weights_after_softmax[indices, :]).sum()
-    #         total_weight = weights_after_softmax.sum()
-    #         gate_fraction_array[layer_ix] = pass_weight / total_weight
-    #     return torch.mean(gate_fraction_array).item()
+    def compute_selected_gates_fraction(self, selected_gates):
+        gate_fraction_array = []
+        indices = torch.tensor(selected_gates, dtype=torch.long)
+        for model_layer in self.layers:
+            if hasattr(model_layer, 'w'):
+                weights_after_softmax = F.softmax(model_layer.w, dim=0)
+                pass_weight = (weights_after_softmax[indices, :]).sum()
+                total_weight = weights_after_softmax.sum()
+                gate_fraction_array.append(pass_weight / total_weight)
+        return torch.mean(torch.tensor(gate_fraction_array)).item()
 
 
 ############################ DATA ########################

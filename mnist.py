@@ -25,9 +25,7 @@ from torch.utils.data import random_split
 from datetime import datetime
 import time
 import torch.profiler
-import hashlib
 import os
-import math
 import socket
 from zoneinfo import ZoneInfo
 import wandb
@@ -57,7 +55,6 @@ SEED = config.get("SEED", random.randint(0, 1024*1024))
 if SEED < 0:
     SEED = random.randint(0, 1000_000)
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-# SEED = config.get("SEED", 97798)
 GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[1200,1200]"))
 INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[16, 150], [15, 30]]"))
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
@@ -76,10 +73,6 @@ CONNECTION_REGULARIZATION = float(config.get("CONNECTION_REGULARIZATION", 5.))
 GATE_WEIGHT_REGULARIZATION = float(config.get("GATE_WEIGHT_REGULARIZATION", 1.))
 LOSS_CE_STRENGTH = float(config.get("LOSS_CE_STRENGTH", 0.9))
 
-PID_P = float(config.get("PID_P", 1.))
-PID_I = float(config.get("PID_I", 0.))
-PID_D = float(config.get("PID_D", 0.))
-
 TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
 
@@ -93,7 +86,6 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "CONST_REGULARIZATION",
                "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH",
-               "PID_P", "PID_I", "PID_D", 
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
@@ -156,47 +148,6 @@ WANDB_KEY and wandb.log({"device": str(device)})
 
 ############################ MODEL ########################
 
-# class LearnableInterconnectBlock(nn.Module):
-#     def __init__(self, number_of_inputs, number_of_outputs, name=''):
-#         super(LearnableInterconnectBlock, self).__init__()
-#         self.number_of_inputs = number_of_inputs
-#         self.number_of_outputs = number_of_outputs
-#         self.name = name
-#         self.binarized = False
-#         self.c = nn.Parameter(torch.zeros((number_of_inputs, number_of_outputs), dtype=torch.float32))
-#         nn.init.normal_(self.c, mean=0.0, std=1)
-
-#     def forward(self, x):
-#         # softmax enforces that all wire weights to a particular output pin sum up to 1 while input pin weights differ
-#         connections = F.softmax(self.c, dim=0) if not self.binarized else self.c # [number_of_inputs, number_of_gates, 2]        
-#         # [batch_size, number_of_inputs] * [number_of_inputs, number_of_outputs] -> [batch_size, number_of_outputs]
-#         return torch.matmul(x, connections.view(self.number_of_inputs, self.number_of_outputs))
-    
-# class LearnableInterconnectLayer(nn.Module):
-#     def __init__(self, layer_inputs, layer_outputs, block_inputs=2, block_outputs=2, name=''):
-#         super(LearnableInterconnectLayer, self).__init__()
-#         self.layer_inputs = layer_inputs
-#         self.layer_outputs = layer_outputs
-#         self.block_inputs = block_inputs
-#         self.block_outputs = block_outputs
-#         self.name = name
-#         self.binarized = False
-
-#         n_blocks_ = layer_inputs // block_inputs
-#         assert n_blocks_ == layer_outputs // block_outputs
-
-#         self.blocks = []
-#         for block_idx in range(0,n_blocks_):
-#             self.blocks.append(LearnableInterconnectBlock(number_of_inputs=self.block_inputs, 
-#                                                           number_of_outputs=self.block_outputs, 
-#                                                           name=f"{self.name}_{block_idx}"))
-#         self.blocks = nn.ModuleList(self.blocks)
-
-#     def forward(self, x):
-#         x_split = x.split(self.block_inputs, dim=1)
-#         return torch.cat([block(chunk) for block, chunk in zip(self.blocks, x_split)], dim=1)
-
-
 class EfficientLearnableInterconnect(nn.Module):
     def __init__(self, layer_inputs, layer_outputs, block_inputs=2, block_outputs=2, name=''):
         super(EfficientLearnableInterconnect, self).__init__()
@@ -233,9 +184,6 @@ class LearnableGate16Array(nn.Module):
 
     def forward(self, x):
         batch_size = x.shape[0]
-        # connections = F.softmax(self.c, dim=0) if not self.binarized else self.c # [number_of_inputs, number_of_gates, 2]
-        # [batch_size, number_of_inputs] * [number_of_inputs, number_of_gates*2] -> [batch_size, number_of_gates*2]
-        # x = torch.matmul(x, connections.view(self.number_of_inputs, self.number_of_gates*2))
         x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
 
         A = x[:,:,0]          # [batch_size, number_of_gates]
@@ -295,11 +243,6 @@ class Model(nn.Module):
         assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
 
         layers_ = []
-        # layers_.append(EfficientLearnableInterconnect(256, 1200*2, 16, 150, "i_0"))
-        # layers_.append(LearnableGate16Array(1200, name="g_0"))
-        # layers_.append(EfficientLearnableInterconnect(1200, 1200*2, 15, 30, "i_1"))
-        # layers_.append(LearnableGate16Array(1200, name="g_1"))
-
         for layer_idx, (layer_gates, layer_interconnect) in enumerate(zip(gate_architecture,interconnect_architecture)):
             if layer_idx==0:
                 layers_.append(EfficientLearnableInterconnect(input_size, layer_gates*2, layer_interconnect[0], layer_interconnect[1], f"i_{layer_idx}"))
@@ -448,51 +391,6 @@ for i, (image, label) in enumerate(test_dataset):
 test_labels = torch.nn.functional.one_hot(test_labels_, num_classes=NUMBER_OF_CATEGORIES)
 test_labels = test_labels.type(torch.float32)
 
-#####################################################
-# !!!
-# x = torch.tensor( [[0.,0.,0.,0.], [0.,1.,1.,0.], [1.,1.,1.,1.]] )
-# li = LearnableInterconnectLayer(256,2048,block_inputs=4,block_outputs=32)
-# eli = EfficientLearnableInterconnect(256,2048,block_inputs=4,block_outputs=32)
-
-# with torch.no_grad():
-        # eli.c[i,:,:].copy_(li.blocks[i].c)
-# indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
-# x = train_images[indices]
-
-
-# gate_array = LearnableGate16Array(600, 256, name='gl_0')
-# layers = []
-# layers.append(EfficientLearnableInterconnect(256, 1200, 16, 75, "i_0"))
-# layers.append(LearnableGate16Array(1200, name="g_0"))
-# layers.append(EfficientLearnableInterconnect(600, 1200, 15, 30, "i_1"))
-# layers.append(LearnableGate16Array(1200, name="g_1"))
-
-# y = layers[0](x)
-# y = layers[1](y)
-# y = layers[2](y)
-# y = layers[3](y)
-# y = gate_array(x)
-
-# 256 -> [16->75]*16 -> 1200 -> [30->30]*40 -> 1200 -> 10
-
-# model = Model(SEED, GATE_ARCHITECTURE, INTERCONNECT_ARCHITECTURE, NUMBER_OF_CATEGORIES, INPUT_SIZE)
-# model(x)
-
-# import IPython
-# IPython.embed()
-
-# batch = 3, size=2
-# ii = LearnableInterconnectBlock(number_of_inputs=4, number_of_outputs=4, name='first')
-# connections = F.softmax(ii.c, dim=0)
-# x1 = torch.matmul(x, connections)
-# this_will_quit()
-#####################################################
-
-### INSTANTIATE THE MODEL AND MOVE TO GPU ###
-random.seed(SEED)
-torch.manual_seed(SEED)
-model = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
-
 ### VALIDATE ###
 
 def get_validate(default_model):
@@ -604,38 +502,6 @@ time_start = time.time()
 control, error, integral = 0., 0., 0. # PID init
 
 for i in range(TRAINING_STEPS):
-    # if i == TRAINING_STEPS // 3:
-    # if i == EPOCH_STEPS * 50: # 100 epochs
-    #     with torch.no_grad():
-    #         log("---> FULL MODEL <---")
-    #         model2 = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
-    #         model2.layers[0].w.copy_(model.layers[0].w)
-    #         model2.layers[0].c.copy_(model.layers[0].c)
-    #         model = model2
-    #         model.layers[0].w.requires_grad = False
-    #         model.layers[0].c.requires_grad = False
-
-            
-    #         model.layers[1].w.data.zero_()
-    #         model.layers[1].w.data[3, :] = 0.1 # A #!!!
-
-    #         model.layers[1].c.data.zero_() # make this 1->1, 2->2 etc
-    #         indices = torch.arange(1, model.layers[1].c.shape[0])
-    #         model.layers[1].c.data[indices, indices, :] = 0.1
-
-    #         PASSTHROUGH_REGULARIZATION = 100.
-
-
-    #         validate = get_validate(model)
-    #         optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
-    # # if i == TRAINING_STEPS *2 // 3:
-    # if i == EPOCH_STEPS * 100: # 200 epochs
-    #         log("---> GRAD RESTORED <---")
-    #         PASSTHROUGH_REGULARIZATION = 1.
-    #         model.layers[0].w.requires_grad = True
-    #         model.layers[0].c.requires_grad = True
-    #         optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
-
     indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
     x = train_images[indices]
     y = train_labels[indices]

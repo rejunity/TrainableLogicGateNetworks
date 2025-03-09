@@ -261,15 +261,16 @@ class Model(nn.Module):
         X = F.softmax(X, dim=-1)
         return X
 
-    # def get_passthrough_fraction(self):
-    #     pass_fraction_array = torch.zeros(len(self.layers), dtype=torch.float32, device=device)
-    #     indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
-    #     for layer_ix, layer in enumerate(self.layers):
-    #         weights_after_softmax = F.softmax(layer.w, dim=0)
-    #         pass_weight = (weights_after_softmax[indices, :]).sum()
-    #         total_weight = weights_after_softmax.sum()
-    #         pass_fraction_array[layer_ix] = pass_weight / total_weight
-    #     return pass_fraction_array
+    def get_passthrough_fraction(self):
+        pass_fraction_array = []
+        indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
+        for model_layer in self.layers:
+            if hasattr(model_layer, 'w'):
+                weights_after_softmax = F.softmax(model_layer.w, dim=0)
+                pass_weight = (weights_after_softmax[indices, :]).sum()
+                total_weight = weights_after_softmax.sum()
+                pass_fraction_array.append(pass_weight / total_weight)
+        return pass_fraction_array
     
     # def compute_selected_gates_fraction(self, selected_gates):
     #     gate_fraction_array = torch.zeros(len(self.layers), dtype=torch.float32, device=device)
@@ -522,8 +523,8 @@ for i in range(TRAINING_STEPS):
 
     # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:
-        # passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction().tolist()])
-        log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}%")
+        passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction()])
+        log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}% - Pass {passthrough_log}")
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, "connection_regularization_loss":connection_regularization_loss, "gate_weight_regularization_loss":gate_weight_regularization_loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, "passthrough_regularization_loss":passthrough_regularization_loss, "const_regularization_loss":const_regularization_loss,
             "tension_loss":tension_loss, })
@@ -542,8 +543,6 @@ for i in range(TRAINING_STEPS):
         log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
 #---------------------------------------------------------------------------------------
 
-
-        # def get_sparsity_metrics(model=None):
         # if True:
         #     # newly_binarized = get_binarized_model(model=model, bin_value=100.)
             

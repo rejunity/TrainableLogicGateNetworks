@@ -541,133 +541,43 @@ for i in range(TRAINING_STEPS):
         _, bin_train_acc = validate(dataset="train", model=model_binarized)
         train_acc_diff = train_acc-bin_train_acc
         log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
-#---------------------------------------------------------------------------------------
-
-        # if True:
-        #     # newly_binarized = get_binarized_model(model=model, bin_value=100.)
-            
-        #     top1w = torch.tensor(0., device=device)
-        #     top2w = torch.tensor(0., device=device)
-        #     top4w = torch.tensor(0., device=device)
-        #     top8w = torch.tensor(0., device=device)
-        #     top1c = torch.tensor(0., device=device)
-        #     top2c = torch.tensor(0., device=device)
-        #     top4c = torch.tensor(0., device=device)
-        #     top8c = torch.tensor(0., device=device)
-        #     for layer_id in range(0,len(model.layers)):
-        #         weights_after_softmax = F.softmax(model.layers[layer_id].w, dim=0)
-        #         top1w += l1_topk(weights_after_softmax,k=1)
-        #         top2w += l1_topk(weights_after_softmax,k=2)
-        #         top4w += l1_topk(weights_after_softmax,k=4)
-        #         top8w += l1_topk(weights_after_softmax,k=8)
-        #         weights_after_softmax = F.softmax(model.layers[layer_id].c, dim=0)
-        #         top1c += l1_topk(weights_after_softmax,k=1)
-        #         top2c += l1_topk(weights_after_softmax,k=2)
-        #         top4c += l1_topk(weights_after_softmax,k=4)
-        #         top8c += l1_topk(weights_after_softmax,k=8)
-        #     top1w /= len(model.layers)
-        #     top2w /= len(model.layers)
-        #     top4w /= len(model.layers)
-        #     top8w /= len(model.layers)
-        #     top1c /= len(model.layers)
-        #     top2c /= len(model.layers)
-        #     top4c /= len(model.layers)
-        #     top8c /= len(model.layers)
-
-            # if current_epoch == 300:
-            #--------------------------
-            # import IPython
-            # IPython.embed()
-
-            # weights_after_softmax = F.softmax(model.layers[0].c, dim=0)
-
-            # ((1 - weights_after_softmax) * weights_after_softmax)
-            #--------------------------
-            # log(f"top1w={top1w},top2w={top2w},top4w={top4w},top8w={top8w}")
-            # log(f"top1c={top1c},top2c={top2c},top4c={top4c},top8c={top8c}")
-
-        # def meanW_to_maxW(model=None):
-        #     meanW_to_maxW_perLayer = []
-        #     for layer_id in range(0,len(model.layers)):
-        #         if not model.layers[layer_id].binarized:
-        #             weights_after_softmax = F.softmax(model.layers[layer_id].w, dim=0)
-        #         else:
-        #             weights_after_softmax = model.layers[layer_id].w
-        #         meanW_to_maxW_perLayer.append(
-        #             (torch.mean(torch.mean(weights_after_softmax, dim=0) / torch.max(weights_after_softmax, dim=0)[0])).item()
-        #             )
-        #     return(np.mean(meanW_to_maxW_perLayer))
-
-        # def weight_diff_from_binarized(model=model, model_binarized=model_binarized):
-        #     meanW_to_maxW_perLayer = []
-        #     for layer_id in range(0,len(model.layers)):
-        #         if not model.layers[layer_id].binarized:
-        #             weights_after_softmax = F.softmax(model.layers[layer_id].w, dim=0)
-        #         else:
-        #             weights_after_softmax = model.layers[layer_id].w
-        #         meanW_to_maxW_perLayer.append(
-        #             (torch.mean(torch.mean(weights_after_softmax, dim=0) / torch.max(weights_after_softmax, dim=0)[0])).item()
-        #             )
-        #     return(np.mean(meanW_to_maxW_perLayer))
-
-            # weights_after_softmax = F.softmax(model.layers[layer_id].w, dim=0)
-            # torch.mean(weights_after_softmax, dim=0, keepdim=True)
-
-#---------------------------------------------------------------------------------------
-
-        # regularization_cap = 100.*current_epoch/EPOCHS
-        # log(f"regularization_cap={regularization_cap:.0f}")
         
-        # if train_acc_diff * 100. > 1.:
-        #     log(f"train_acc_diff={train_acc_diff*100:.2f}% > 1%")
-        #     CONNECTION_REGULARIZATION = 1.05 * CONNECTION_REGULARIZATION
-        #     if CONNECTION_REGULARIZATION > regularization_cap:
-        #         CONNECTION_REGULARIZATION = regularization_cap
-            
-        #     GATE_WEIGHT_REGULARIZATION = 1.05 * GATE_WEIGHT_REGULARIZATION
-        #     if GATE_WEIGHT_REGULARIZATION > regularization_cap:
-        #         GATE_WEIGHT_REGULARIZATION = regularization_cap
-
-        #     log(f"INC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}, GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
-        # else:
-        #     log(f"train_acc_diff={train_acc_diff*100:.2f}% < 1%")
-        #     CONNECTION_REGULARIZATION = CONNECTION_REGULARIZATION / 1.1
-        #     GATE_WEIGHT_REGULARIZATION = GATE_WEIGHT_REGULARIZATION / 1.1
-        #     log(f"DEC CONNECTION_REGULARIZATION->{CONNECTION_REGULARIZATION}, GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
-
-        # REGULARIZE USING TOP1C/W----------------------------------------------------
-        # def pid_controller(value, target=1, previous_error=0, integral=0, kp=1, ki=0, kd=0):
-        # if current_epoch > 5.:
-        #     # control, error, integral = pid_controller(top1c.item(), prev_error=error, prev_integral=integral)
-        #     control, error, integral = pid_controller(-train_acc_diff, target=0., prev_error=error, prev_integral=integral)
-        #     CONNECTION_REGULARIZATION = min(1_000, max(0,control) * 1_000)
-        #     # log(f"cPID: value={top1c*100:.2f}%, control={control:.2f}, error={error:.2f}, integral={integral:.2f}")
-        #     log(f"cPID: value={train_acc_diff*100:.2f}%, control={control:.2f}, error={error:.2f}, integral={integral:.2f}")
-        #     log(f"CONNECTION_REGULARIZATION={CONNECTION_REGULARIZATION:.0f}")
-
-        # log(f"wPID: {(1.-top1w)*100:.2f}% vs 1.0%")
-        # if (1.-top1w)*100 > 1.0:
-        #     GATE_WEIGHT_REGULARIZATION = 1.075 * GATE_WEIGHT_REGULARIZATION
-        #     if GATE_WEIGHT_REGULARIZATION > regularization_cap:
-        #         GATE_WEIGHT_REGULARIZATION = regularization_cap
-        #     log(f"INC GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
-        # else:
-        #     GATE_WEIGHT_REGULARIZATION = GATE_WEIGHT_REGULARIZATION / 1.1
-        #     log(f"DEC GATE_WEIGHT_REGULARIZATION->{GATE_WEIGHT_REGULARIZATION}")
-        #------------------------------------------------------------------------------
-
-        # val_loss, val_acc = validate()
-        # _, bin_val_acc = validate(model=model_binarized)
-        # # log(f"EPOCH={current_epoch}/{EPOCHS} VAL loss={val_loss:.3f} acc={val_acc*100:.2f}%")
-        # log(f"EPOCH={current_epoch}/{EPOCHS} BIN VAL acc={bin_val_acc*100:.2f}%,   val_acc_diff={val_acc*100-bin_val_acc*100:.2f}%")
-
+        top1w = torch.tensor(0., device=device)
+        top2w = torch.tensor(0., device=device)
+        top4w = torch.tensor(0., device=device)
+        top8w = torch.tensor(0., device=device)
+        # top1c = torch.tensor(0., device=device)
+        # top2c = torch.tensor(0., device=device)
+        # top4c = torch.tensor(0., device=device)
+        # top8c = torch.tensor(0., device=device)
+        for model_layer in model.layers:
+            if hasattr(model_layer, 'w'):
+                weights_after_softmax = F.softmax(model_layer.w, dim=0)
+                top1w += l1_topk(weights_after_softmax,k=1)
+                top2w += l1_topk(weights_after_softmax,k=2)
+                top4w += l1_topk(weights_after_softmax,k=4)
+                top8w += l1_topk(weights_after_softmax,k=8)
+            # weights_after_softmax = F.softmax(model.layers[layer_id].c, dim=0)
+            # top1c += l1_topk(weights_after_softmax,k=1)
+            # top2c += l1_topk(weights_after_softmax,k=2)
+            # top4c += l1_topk(weights_after_softmax,k=4)
+            # top8c += l1_topk(weights_after_softmax,k=8)
+        top1w /= len(model.layers)
+        top2w /= len(model.layers)
+        top4w /= len(model.layers)
+        top8w /= len(model.layers)
+        log(f"topW: {top1w*100.:.1f}%, {top2w*100.:.1f}%, {top4w*100.:.1f}%, {top8w*100.:.1f}%")
+        # top1c /= len(model.layers)
+        # top2c /= len(model.layers)
+        # top4c /= len(model.layers)
+        # top8c /= len(model.layers)
         WANDB_KEY and wandb.log({"epoch": current_epoch, 
             "train_loss": train_loss, "train_acc": train_acc*100,
             # "val_loss": val_loss, "val_acc": val_acc*100,
             "bin_train_acc": bin_train_acc*100, "train_acc_diff": train_acc*100-bin_train_acc*100,
             # "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
              "top1w":top1w, "top2w":top2w, "top4w":top4w, "top8w":top8w,
-             "top1c":top1c, "top2c":top2c, "top4c":top4c, "top8c":top8c,
+            #  "top1c":top1c, "top2c":top2c, "top4c":top4c, "top8c":top8c,
              "control":control, "error":error, "integral":integral,
              "gate_perc_pass": model.compute_selected_gates_fraction([3, 5, 10, 12])*100.,
              "gate_perc_const": model.compute_selected_gates_fraction([0, 15])*100.,

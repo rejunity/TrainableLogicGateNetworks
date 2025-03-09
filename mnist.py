@@ -65,12 +65,6 @@ VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
 
 LEARNING_RATE = float(config.get("LEARNING_RATE", 0.01))
 
-CONST_REGULARIZATION = float(config.get("CONST_REGULARIZATION", 5.))
-PASSTHROUGH_REGULARIZATION = float(config.get("PASSTHROUGH_REGULARIZATION", 1.))
-CONNECTION_REGULARIZATION = float(config.get("CONNECTION_REGULARIZATION", 5.))
-GATE_WEIGHT_REGULARIZATION = float(config.get("GATE_WEIGHT_REGULARIZATION", 1.))
-LOSS_CE_STRENGTH = float(config.get("LOSS_CE_STRENGTH", 0.9))
-
 TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
 
@@ -82,8 +76,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
-               "LEARNING_RATE", "PASSTHROUGH_REGULARIZATION", "CONST_REGULARIZATION",
-               "CONNECTION_REGULARIZATION", "GATE_WEIGHT_REGULARIZATION", "LOSS_CE_STRENGTH",
+               "LEARNING_RATE",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
@@ -420,14 +413,7 @@ def get_binarized_model(model=None, bin_value=1):
 
     return model_binarized
 
-def l1_maxOnly_regularization(weights_after_softmax):
-    max_values, _ = torch.max(weights_after_softmax, dim=0, keepdim=True)
-    non_max_sum = (1 - max_values).sum()
-    # largest_possible_sum = torch.prod(torch.tensor(weights_after_softmax.shape[1:])) # when all elements are uniform; cutting out 0 dim since it is maxxed over
-    # return non_max_sum / largest_possible_sum # uniform distribution gives 1 per layer
-    return non_max_sum #!!! removing normalization to check if this perhaps trains better
-
-def l1_topk(weights_after_softmax, k=4, special_dim=0): # similar to l1_maxOnly_regularization but goes to 1 when binarized
+def l1_topk(weights_after_softmax, k=4, special_dim=0): # but goes to 1 when binarized; 0 when uniform
     # test
     # t1 = torch.zeros([8,32,75]); l1_topk(F.softmax(t1,dim=1),special_dim=1) # should get zero
     # t1 = torch.rand(8, 32, 75); l1_topk(F.softmax(t1,dim=1),special_dim=1) # should get almost zero
@@ -439,18 +425,6 @@ def l1_topk(weights_after_softmax, k=4, special_dim=0): # similar to l1_maxOnly_
     non_top_k_sum = (1 - top_k_sum).sum()
     return 1. - non_top_k_sum / normalization_factor
 
-def passthrough_regularization(weights_after_softmax):
-    indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
-    pass_weight = (weights_after_softmax[indices, :]).sum()
-    total_weight = weights_after_softmax.sum()
-    return pass_weight / total_weight
-
-def const_regularization(weights_after_softmax):
-    indices = torch.tensor([0, 15], dtype=torch.long)
-    const_weight = (weights_after_softmax[indices, :]).sum()
-    total_weight = weights_after_softmax.sum()
-    return const_weight / total_weight
-
 ### INSTANTIATE THE MODEL AND MOVE TO GPU ###
 
 model = Model(SEED, GATE_ARCHITECTURE, INTERCONNECT_ARCHITECTURE, NUMBER_OF_CATEGORIES, INPUT_SIZE).to(device)
@@ -461,19 +435,9 @@ val_loss, val_accuracy = validate(dataset="val")
 log(f"INIT VAL loss={val_loss:.3f} acc={val_accuracy*100:.2f}%")
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
 
-### load ###
-# model.load_state_dict(torch.load("20250225-140458_binTestAcc7911_seed982779_epochs100_3x300_b256_lr10.pth", map_location=torch.device(device), weights_only=False))
-# val_loss, val_accuracy = validate(dataset="val")
-# log(f"INIT VAL loss={val_loss:.3f} acc={val_accuracy*100:.2f}%")
-# if (CONNECTION_REGULARIZATION > 0) and (GATE_WEIGHT_REGULARIZATION  > 0):
-    # log("REGULARIZATING")
-### end load ###
-
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
 time_start = time.time()
-
-control, error, integral = 0., 0., 0. # PID init
 
 for i in range(TRAINING_STEPS):
     indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
@@ -481,7 +445,6 @@ for i in range(TRAINING_STEPS):
     y = train_labels[indices]
     optimizer.zero_grad()
     with torch.set_grad_enabled(True):
-        # !!! hard remove const
         for l in model.layers:
             if SUPPRESS_CONST:
                 for const_gate_ix in [0,15]:
@@ -491,12 +454,7 @@ for i in range(TRAINING_STEPS):
                     l.w.data[pass_gate_ix, :] = 0
 
         model_output = model(x)
-        loss_ce = F.cross_entropy(model_output, y) * LOSS_CE_STRENGTH
-
-        connection_regularization_loss = 0
-        gate_weight_regularization_loss = 0
-        passthrough_regularization_loss = 0
-        const_regularization_loss = 0
+        loss_ce = F.cross_entropy(model_output, y)
         
         tension_loss = 0
         for layer in model.layers:
@@ -505,21 +463,6 @@ for i in range(TRAINING_STEPS):
                 tension_loss += torch.sum((1 - conn_weights_after_softmax) * conn_weights_after_softmax)
                 gate_weights_after_softmax = F.softmax(layer.w, dim=0)
                 tension_loss += torch.sum((1 - gate_weights_after_softmax) * gate_weights_after_softmax)
-
-            # const_regularization_loss += const_regularization(F.softmax(layer.w, dim=0)) #!!!
-            # passthrough_regularization_loss += passthrough_regularization(F.softmax(layer.w, dim=0))
-            # connection_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.c, dim=0))  #!!!
-            # gate_weight_regularization_loss += l1_maxOnly_regularization(F.softmax(layer.w, dim=0)) #!!!
-            pass
-        
-        # const_regularization_loss = const_regularization_loss / len(model.layers) #!!!
-        # passthrough_regularization_loss = passthrough_regularization_loss / len(model.layers) #!!!
-        # connection_regularization_loss = CONNECTION_REGULARIZATION * connection_regularization_loss / len(model.layers)
-        # gate_weight_regularization_loss = GATE_WEIGHT_REGULARIZATION * gate_weight_regularization_loss / len(model.layers)
-        # regularization_loss = CONST_REGULARIZATION * const_regularization_loss + PASSTHROUGH_REGULARIZATION * passthrough_regularization_loss +  connection_regularization_loss + gate_weight_regularization_loss #!!!
-        # regularization_loss = (1 - LOSS_CE_STRENGTH) * regularization_loss
-        
-        # equal_factor = 1. / 620. * 1.465 / 10_000_000. # such that CE loss equals 0.001% reg loss at the end
         regularization_loss = tension_loss * TENSION_REGULARIZATION * (float(i) / float(TRAINING_STEPS))
 
         loss = loss_ce + regularization_loss
@@ -530,13 +473,9 @@ for i in range(TRAINING_STEPS):
     if (i + 1) % PRINTOUT_EVERY == 0:
         passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction()])
         log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}% - Pass {passthrough_log}")
-        WANDB_KEY and wandb.log({"training_step": i, "loss": loss, "connection_regularization_loss":connection_regularization_loss, "gate_weight_regularization_loss":gate_weight_regularization_loss, 
-            "regularization_loss_fraction":(1-loss_ce/loss)*100, "passthrough_regularization_loss":passthrough_regularization_loss, "const_regularization_loss":const_regularization_loss,
+        WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
+            "regularization_loss_fraction":(1-loss_ce/loss)*100, 
             "tension_loss":tension_loss, })
-        # log(f"loss_ce={F.cross_entropy(model_output, y).detach().item()}")
-        # log(f"connection_regularization_loss={connection_regularization_loss}")
-        # log(f"gate_weight_regularization_loss={gate_weight_regularization_loss}")
-        # log(f"passthrough_regularization_loss={passthrough_regularization_loss}")
     if (i + 1) % VALIDATE_EVERY == 0:
         current_epoch = (i+1) // EPOCH_STEPS
 
@@ -583,8 +522,7 @@ for i in range(TRAINING_STEPS):
             "bin_train_acc": bin_train_acc*100, "train_acc_diff": train_acc*100-bin_train_acc*100,
             # "bin_val_acc": bin_val_acc*100, "val_acc_diff": val_acc*100-bin_val_acc*100,
              "top1w":top1w, "top2w":top2w, "top4w":top4w, "top8w":top8w,
-            #  "top1c":top1c, "top2c":top2c, "top4c":top4c, "top8c":top8c,
-             "control":control, "error":error, "integral":integral,
+             "top1c":top1c, "top2c":top2c, "top4c":top4c, "top8c":top8c,
              "gate_perc_pass": model.compute_selected_gates_fraction([3, 5, 10, 12])*100.,
              "gate_perc_const": model.compute_selected_gates_fraction([0, 15])*100.,
              "gate_perc_and": model.compute_selected_gates_fraction([1, 14])*100.,

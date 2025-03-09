@@ -604,12 +604,10 @@ for i in range(TRAINING_STEPS):
         top2w /= len(model.layers)
         top4w /= len(model.layers)
         top8w /= len(model.layers)
-        log(f"topW: {top1w*100.:.1f}%, {top2w*100.:.1f}%, {top4w*100.:.1f}%, {top8w*100.:.1f}%")
         top1c /= len(model.layers)
         top2c /= len(model.layers)
         top4c /= len(model.layers)
         top8c /= len(model.layers)
-        log(f"topC: {top1c*100.:.1f}%, {top2c*100.:.1f}%, {top4c*100.:.1f}%, {top8c*100.:.1f}%")
 
         WANDB_KEY and wandb.log({"epoch": current_epoch, 
             "train_loss": train_loss, "train_acc": train_acc*100,

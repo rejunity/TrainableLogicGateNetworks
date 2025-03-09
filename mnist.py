@@ -426,11 +426,15 @@ def l1_maxOnly_regularization(weights_after_softmax):
     # return non_max_sum / largest_possible_sum # uniform distribution gives 1 per layer
     return non_max_sum #!!! removing normalization to check if this perhaps trains better
 
-def l1_topk(weights_after_softmax, k=5): # similar to l1_maxOnly_regularization but goes to 1 when binarized
-    # assert len(weights_after_softmax.shape) == 2
-    normalization_factor = (weights_after_softmax.shape[0]-k)/weights_after_softmax.shape[0] * torch.prod(torch.tensor(weights_after_softmax.shape[1:])) # in case of a uniform tensor
-    top_k_values, _ = torch.topk(weights_after_softmax, k, dim=0)
-    top_k_sum = top_k_values.sum(dim=0, keepdim=True)
+def l1_topk(weights_after_softmax, k=4, special_dim=0): # similar to l1_maxOnly_regularization but goes to 1 when binarized
+    # test
+    # t1 = torch.zeros([8,32,75]); l1_topk(F.softmax(t1,dim=1),special_dim=1) # should get zero
+    # t1 = torch.rand(8, 32, 75); l1_topk(F.softmax(t1,dim=1),special_dim=1) # should get almost zero
+    # ones_at = torch.argmax(t1, dim=1); t1.zero_(); t1.scatter_(dim=1, index=ones_at.unsqueeze(1), value=100); l1_topk(F.softmax(t1,dim=1),special_dim=1) # should get 1
+    other_dims_prod = torch.prod(torch.tensor([x for i, x in enumerate(weights_after_softmax.shape) if i != special_dim]))
+    normalization_factor = (weights_after_softmax.shape[special_dim]-k)/weights_after_softmax.shape[special_dim] * other_dims_prod # in case of a uniform tensor
+    top_k_values, _ = torch.topk(weights_after_softmax, k, dim=special_dim)
+    top_k_sum = top_k_values.sum(dim=special_dim, keepdim=True)
     non_top_k_sum = (1 - top_k_sum).sum()
     return 1. - non_top_k_sum / normalization_factor
 
@@ -546,10 +550,10 @@ for i in range(TRAINING_STEPS):
         top2w = torch.tensor(0., device=device)
         top4w = torch.tensor(0., device=device)
         top8w = torch.tensor(0., device=device)
-        # top1c = torch.tensor(0., device=device)
-        # top2c = torch.tensor(0., device=device)
-        # top4c = torch.tensor(0., device=device)
-        # top8c = torch.tensor(0., device=device)
+        top1c = torch.tensor(0., device=device)
+        top2c = torch.tensor(0., device=device)
+        top4c = torch.tensor(0., device=device)
+        top8c = torch.tensor(0., device=device)
         for model_layer in model.layers:
             if hasattr(model_layer, 'w'):
                 weights_after_softmax = F.softmax(model_layer.w, dim=0)
@@ -557,20 +561,23 @@ for i in range(TRAINING_STEPS):
                 top2w += l1_topk(weights_after_softmax,k=2)
                 top4w += l1_topk(weights_after_softmax,k=4)
                 top8w += l1_topk(weights_after_softmax,k=8)
-            # weights_after_softmax = F.softmax(model.layers[layer_id].c, dim=0)
-            # top1c += l1_topk(weights_after_softmax,k=1)
-            # top2c += l1_topk(weights_after_softmax,k=2)
-            # top4c += l1_topk(weights_after_softmax,k=4)
-            # top8c += l1_topk(weights_after_softmax,k=8)
+            if hasattr(model_layer, 'c'):
+                weights_after_softmax = F.softmax(model_layer.c, dim=1)
+                top1c += l1_topk(weights_after_softmax,k=1,special_dim=1)
+                top2c += l1_topk(weights_after_softmax,k=2,special_dim=1)
+                top4c += l1_topk(weights_after_softmax,k=4,special_dim=1)
+                top8c += l1_topk(weights_after_softmax,k=8,special_dim=1)
         top1w /= len(model.layers)
         top2w /= len(model.layers)
         top4w /= len(model.layers)
         top8w /= len(model.layers)
         log(f"topW: {top1w*100.:.1f}%, {top2w*100.:.1f}%, {top4w*100.:.1f}%, {top8w*100.:.1f}%")
-        # top1c /= len(model.layers)
-        # top2c /= len(model.layers)
-        # top4c /= len(model.layers)
-        # top8c /= len(model.layers)
+        top1c /= len(model.layers)
+        top2c /= len(model.layers)
+        top4c /= len(model.layers)
+        top8c /= len(model.layers)
+        log(f"topC: {top1c*100.:.1f}%, {top2c*100.:.1f}%, {top4c*100.:.1f}%, {top8c*100.:.1f}%")
+
         WANDB_KEY and wandb.log({"epoch": current_epoch, 
             "train_loss": train_loss, "train_acc": train_acc*100,
             # "val_loss": val_loss, "val_acc": val_acc*100,

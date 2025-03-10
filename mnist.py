@@ -142,9 +142,9 @@ WANDB_KEY and wandb.log({"device": str(device)})
 
 ############################ MODEL ########################
 
-class EfficientLearnableInterconnect(nn.Module):
+class LearnableInterconnect(nn.Module):
     def __init__(self, layer_inputs, layer_outputs, block_inputs=2, block_outputs=2, name=''):
-        super(EfficientLearnableInterconnect, self).__init__()
+        super(LearnableInterconnect, self).__init__()
         self.layer_inputs = layer_inputs
         self.layer_outputs = layer_outputs
         self.block_inputs = block_inputs
@@ -239,10 +239,10 @@ class Model(nn.Module):
         layers_ = []
         for layer_idx, (layer_gates, layer_interconnect) in enumerate(zip(gate_architecture,interconnect_architecture)):
             if layer_idx==0:
-                layers_.append(EfficientLearnableInterconnect(input_size, layer_gates*2, layer_interconnect[0], layer_interconnect[1], f"i_{layer_idx}"))
+                layers_.append(LearnableInterconnect(input_size, layer_gates*2, layer_interconnect[0], layer_interconnect[1], f"i_{layer_idx}"))
                 layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
             else:
-                layers_.append(EfficientLearnableInterconnect(prev_gates, layer_gates*2, layer_interconnect[0], layer_interconnect[1], f"i_{layer_idx}"))
+                layers_.append(LearnableInterconnect(prev_gates, layer_gates*2, layer_interconnect[0], layer_interconnect[1], f"i_{layer_idx}"))
                 layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
             prev_gates = layer_gates
         self.layers = nn.ModuleList(layers_)

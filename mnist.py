@@ -141,7 +141,7 @@ WANDB_KEY and wandb.log({"device": str(device)})
 ############################ MODEL ########################
 
 class LearnableInterconnect(nn.Module):
-    def __init__(self, layer_inputs, layer_outputs, block_inputs=2, block_outputs=2, name=''):
+    def __init__(self, layer_inputs, layer_outputs, block_inputs, block_outputs, name=''):
         super(LearnableInterconnect, self).__init__()
         self.layer_inputs = layer_inputs
         self.layer_outputs = layer_outputs
@@ -161,6 +161,25 @@ class LearnableInterconnect(nn.Module):
         connections = F.softmax(self.c, dim=1) if not self.binarized else self.c
         output = torch.einsum('bnm,nmo->bno', x_reshaped, connections)
         return output.reshape(x.shape[0], self.layer_outputs)
+    # test
+    # t1 = torch.tensor( [1,0,1,0, 
+    #                 0,1,0,1], dtype=torch.float).view(1,8)
+    # li = LearnableInterconnect(8,10,4,5) # n_blocks=2
+    # li.c.data = torch.zeros_like(li.c.data)
+    # li.binarized = True
+    # li.c.data[0,0,0] = 1.
+    # li.c.data[0,1,1] = 1.
+    # li.c.data[0,2,2] = 1.
+    # li.c.data[0,3,3] = 1.
+    # li.c.data[0,3,4] = 1.
+    # li.c.data[1,0,0] = 1.
+    # li.c.data[1,1,1] = 1.
+    # li.c.data[1,2,2] = 1.
+    # li.c.data[1,3,3] = 1.
+    # li.c.data[1,3,4] = 1.
+    # li(t1)
+    # assert torch.allclose(li(t1), torch.tensor([[1., 0., 1., 0., 0., 
+    #                                          0., 1., 0., 1., 1.]]))
 
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, name=''):
@@ -279,10 +298,6 @@ class Model(nn.Module):
 
 
 ############################ DATA ########################
-
-
-
-
 
 ### GENERATORS
 def binarize_image_with_histogram(image, verbose=False):

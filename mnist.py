@@ -56,7 +56,7 @@ if SEED < 0:
     SEED = random.randint(0, 1000_000)
 LOG_NAME = f"{LOG_TAG}_{SEED}"
 GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[1300,1300,1300]"))
-INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[32, 325], [15, 30], [15, 30]]"))
+INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[32, 325], [26, 52], [26, 52]]"))
 assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 

@@ -55,8 +55,9 @@ SEED = config.get("SEED", random.randint(0, 1024*1024))
 if SEED < 0:
     SEED = random.randint(0, 1000_000)
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[1200,1200]"))
-INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[16, 150], [15, 30]]"))
+GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[1300,1300,1300]"))
+INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[32, 325], [15, 30], [15, 30]]"))
+assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
 EPOCHS = int(config.get("EPOCHS", 50))
@@ -152,7 +153,7 @@ class EfficientLearnableInterconnect(nn.Module):
         self.binarized = False
         
         self.n_blocks = layer_inputs // block_inputs
-        assert self.n_blocks == layer_outputs // block_outputs
+        assert self.n_blocks == layer_outputs // block_outputs, f"name={self.name}, n_blocks={self.n_blocks}, block_inputs={self.block_inputs}"
         
         self.c = nn.Parameter(torch.zeros((self.n_blocks, block_inputs, block_outputs), dtype=torch.float32))
         nn.init.normal_(self.c, mean=0.0, std=1)
@@ -490,23 +491,26 @@ for i in range(TRAINING_STEPS):
     optimizer.zero_grad()
     with torch.set_grad_enabled(True):
         for l in model.layers:
-            if SUPPRESS_CONST:
-                for const_gate_ix in [0,15]:
-                    l.w.data[const_gate_ix, :] = 0
-            if SUPPRESS_PASSTHROUGH:
-                for pass_gate_ix in [3, 5, 10, 12]:
-                    l.w.data[pass_gate_ix, :] = 0
+            if hasattr(l,'w'):
+                if SUPPRESS_CONST:
+                    for const_gate_ix in [0,15]:
+                        l.w.data[const_gate_ix, :] = 0
+                if SUPPRESS_PASSTHROUGH:
+                    for pass_gate_ix in [3, 5, 10, 12]:
+                        l.w.data[pass_gate_ix, :] = 0
 
         model_output = model(x)
         loss_ce = F.cross_entropy(model_output, y)
         
         tension_loss = 0
-        for layer in model.layers:
-            if TENSION_REGULARIZATION > 0:
-                conn_weights_after_softmax = F.softmax(layer.c, dim=0)
-                tension_loss += torch.sum((1 - conn_weights_after_softmax) * conn_weights_after_softmax)
-                gate_weights_after_softmax = F.softmax(layer.w, dim=0)
-                tension_loss += torch.sum((1 - gate_weights_after_softmax) * gate_weights_after_softmax)
+        if TENSION_REGULARIZATION > 0:
+            for model_layer in model.layers:
+                if hasattr(model_layer, 'c'):
+                    conn_weights_after_softmax = F.softmax(model_layer.c, dim=0)
+                    tension_loss += torch.sum((1 - conn_weights_after_softmax) * conn_weights_after_softmax)
+                if hasattr(model_layer, 'w'):
+                    gate_weights_after_softmax = F.softmax(model_layer.w, dim=0)
+                    tension_loss += torch.sum((1 - gate_weights_after_softmax) * gate_weights_after_softmax)
         regularization_loss = tension_loss * TENSION_REGULARIZATION * (float(i) / float(TRAINING_STEPS))
 
         loss = loss_ce + regularization_loss

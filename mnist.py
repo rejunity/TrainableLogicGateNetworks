@@ -137,7 +137,6 @@ try:
                       "cpu")
 except:
     device = "cpu"
-log(f"device={device}")
 WANDB_KEY and wandb.log({"device": str(device)})
 
 ############################ MODEL ########################
@@ -327,7 +326,15 @@ test_dataset = torchvision.datasets.MNIST(
     download=True
 )
 
+### INSTANTIATE THE MODEL AND MOVE TO GPU ###
 
+log(f"PREPARE MODEL on device={device}")
+model = Model(SEED, GATE_ARCHITECTURE, INTERCONNECT_ARCHITECTURE, NUMBER_OF_CATEGORIES, INPUT_SIZE).to(device)
+log(f"model={model}")
+
+### SPLIT TRAIN DATASET ###
+
+log(f"LOAD DATA")
 train_size = int(TRAIN_FRACTION * len(train_dataset))
 val_size = len(train_dataset) - train_size
 train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(DATA_SPLIT_SEED))
@@ -443,12 +450,9 @@ def l1_topk(weights_after_softmax, k=4, special_dim=0): # but goes to 1 when bin
     non_top_k_sum = (1 - top_k_sum).sum()
     return 1. - non_top_k_sum / normalization_factor
 
-### INSTANTIATE THE MODEL AND MOVE TO GPU ###
-
-model = Model(SEED, GATE_ARCHITECTURE, INTERCONNECT_ARCHITECTURE, NUMBER_OF_CATEGORIES, INPUT_SIZE).to(device)
-validate = get_validate(model)
 ### TRAIN ###
 
+validate = get_validate(model)
 val_loss, val_accuracy = validate(dataset="val")
 log(f"INIT VAL loss={val_loss:.3f} acc={val_accuracy*100:.2f}%")
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})

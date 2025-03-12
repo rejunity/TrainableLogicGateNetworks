@@ -139,6 +139,13 @@ except:
     device = "cpu"
 WANDB_KEY and wandb.log({"device": str(device)})
 
+#################### TENSOR BINARIZATION ##################
+
+def binarize_inplace(x, dim=-1, bin_value=1):
+    ones_at = torch.argmax(x, dim=dim)
+    x.data.zero_()
+    x.data.scatter_(dim=dim, index=ones_at.unsqueeze(dim), value=bin_value)
+
 ############################ MODEL ########################
 
 class LearnableInterconnect(nn.Module):

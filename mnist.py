@@ -169,6 +169,11 @@ class LearnableInterconnect(nn.Module):
         connections = F.softmax(self.c, dim=1) if not self.binarized else self.c
         output = torch.einsum('bnm,nmo->bno', x_reshaped, connections)
         return output.reshape(x.shape[0], self.layer_outputs)
+
+    def binarize(self, bin_value=1):
+        binarize_inplace(self.c, dim=1, bin_value=bin_value)
+        self.binarized = True
+
     # test
     # t1 = torch.tensor( [1,0,1,0, 
     #                 0,1,0,1], dtype=torch.float).view(1,8)
@@ -245,7 +250,11 @@ class LearnableGate16Array(nn.Module):
             gates = gates.unsqueeze(dim=1)                    # broadcast [C,N] -> [C,1,N]; C=16, N=batch_size
         x = (gates * weights.unsqueeze(dim=-1)).sum(dim=0) # [C,W,N] .* (broadcast [C,W] -> [C,W,1]) =[sum-over-C]=> [W,N]
         return x.transpose(0,1)
-    
+   
+    def binarize(self, bin_value=1):
+        binarize_inplace(self.w, dim=0, bin_value=bin_value)
+        self.binarized = True
+
 
 class Model(nn.Module):
     def __init__(self, seed, gate_architecture, interconnect_architecture, number_of_categories, input_size):
@@ -281,6 +290,14 @@ class Model(nn.Module):
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         X = F.softmax(X, dim=-1)
         return X
+
+    def clone_and_binarize(self, device, bin_value=1):
+        model_binarized = Model(self.seed, self.gate_architecture, self.interconnect_architecture, self.number_of_categories, self.input_size).to(device)
+        model_binarized.load_state_dict(self.state_dict())
+        for layer in model_binarized.layers:
+            if hasattr(layer, 'binarize') and callable(layer.binarize):
+                layer.binarize(bin_value)
+        return model_binarized
 
     def get_passthrough_fraction(self):
         pass_fraction_array = []
@@ -429,21 +446,22 @@ def get_validate(default_model):
     return validate
 
 def get_binarized_model(model=None, bin_value=1):
-    model_binarized = Model(model.seed, model.gate_architecture, model.interconnect_architecture, model.number_of_categories, model.input_size).to(device)
-    model_binarized.load_state_dict(model.state_dict())
+    return model.clone_and_binarize(device, bin_value)
 
-    for model_binarized_layer in model_binarized.layers:
-        if hasattr(model_binarized_layer, 'w'):
-            ones_at = torch.argmax(model_binarized_layer.w.data, dim=0)
-            model_binarized_layer.w.data.zero_()
-            model_binarized_layer.w.data.scatter_(dim=0, index=ones_at.unsqueeze(0), value=bin_value)
-        if hasattr(model_binarized_layer, 'c'):
-            ones_at = torch.argmax(model_binarized_layer.c.data, dim=1)
-            model_binarized_layer.c.data.zero_()
-            model_binarized_layer.c.data.scatter_(dim=1, index=ones_at.unsqueeze(1), value=bin_value)
-        model_binarized_layer.binarized = True
+    # model_binarized = Model(model.seed, model.gate_architecture, model.interconnect_architecture, model.number_of_categories, model.input_size).to(device)
+    # model_binarized.load_state_dict(model.state_dict())
 
-    return model_binarized
+    # for model_binarized_layer in model_binarized.layers:
+    #     if hasattr(model_binarized_layer, 'w'):
+    #         ones_at = torch.argmax(model_binarized_layer.w.data, dim=0)
+    #         model_binarized_layer.w.data.zero_()
+    #         model_binarized_layer.w.data.scatter_(dim=0, index=ones_at.unsqueeze(0), value=bin_value)
+    #     if hasattr(model_binarized_layer, 'c'):
+    #         ones_at = torch.argmax(model_binarized_layer.c.data, dim=1)
+    #         model_binarized_layer.c.data.zero_()
+    #         model_binarized_layer.c.data.scatter_(dim=1, index=ones_at.unsqueeze(1), value=bin_value)
+    #     model_binarized_layer.binarized = True
+    # return model_binarized
 
 def l1_topk(weights_after_softmax, k=4, special_dim=0): # but goes to 1 when binarized; 0 when uniform
     # test

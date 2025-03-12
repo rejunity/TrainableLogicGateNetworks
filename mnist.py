@@ -149,8 +149,9 @@ def binarize_inplace(x, dim=-1, bin_value=1):
 ############################ MODEL ########################
 
 class LearnableInterconnect(nn.Module):
+class BlockBottleneckedInterconnect(nn.Module):
     def __init__(self, layer_inputs, layer_outputs, block_inputs, block_outputs, name=''):
-        super(LearnableInterconnect, self).__init__()
+        super(BlockBottleneckedInterconnect, self).__init__()
         self.layer_inputs = layer_inputs
         self.layer_outputs = layer_outputs
         self.block_inputs = block_inputs
@@ -176,8 +177,8 @@ class LearnableInterconnect(nn.Module):
 
     # test
     # t1 = torch.tensor( [1,0,1,0, 
-    #                 0,1,0,1], dtype=torch.float).view(1,8)
-    # li = LearnableInterconnect(8,10,4,5) # n_blocks=2
+    #                     0,1,0,1], dtype=torch.float).view(1,8)
+    # li = BlockBottleneckedInterconnect(8,10,4,5) # n_blocks=2
     # li.c.data = torch.zeros_like(li.c.data)
     # li.binarized = True
     # li.c.data[0,0,0] = 1.
@@ -192,7 +193,7 @@ class LearnableInterconnect(nn.Module):
     # li.c.data[1,3,4] = 1.
     # li(t1)
     # assert torch.allclose(li(t1), torch.tensor([[1., 0., 1., 0., 0., 
-    #                                          0., 1., 0., 1., 1.]]))
+    #                                              0., 1., 0., 1., 1.]]))
 
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, name=''):
@@ -273,14 +274,15 @@ class Model(nn.Module):
         assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
 
         layers_ = []
-        for layer_idx, (layer_gates, layer_interconnect) in enumerate(zip(gate_architecture,interconnect_architecture)):
-            if layer_idx==0:
-                layers_.append(LearnableInterconnect(input_size, layer_gates*2, layer_interconnect[0], layer_interconnect[1], f"i_{layer_idx}"))
-                layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
+        layer_inputs = input_size
+        for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
+            if   len(interconnect_params) == 1:
+                interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],                                       name=f"i_{layer_idx}")
             else:
                 layers_.append(LearnableInterconnect(prev_gates, layer_gates*2, layer_interconnect[0], layer_interconnect[1], f"i_{layer_idx}"))
-                layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
-            prev_gates = layer_gates
+            layers_.append(interconnect)
+            layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
+            layer_inputs = layer_gates
         self.layers = nn.ModuleList(layers_)
 
     def forward(self, X):

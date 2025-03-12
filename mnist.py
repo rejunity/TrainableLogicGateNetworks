@@ -397,6 +397,12 @@ class Model(nn.Module):
         return torch.mean(torch.tensor(gate_fraction_array)).item()
 
 
+### INSTANTIATE THE MODEL AND MOVE TO GPU ###
+
+log(f"PREPARE MODEL on device={device}")
+model = Model(SEED, GATE_ARCHITECTURE, INTERCONNECT_ARCHITECTURE, NUMBER_OF_CATEGORIES, INPUT_SIZE).to(device)
+log(f"model={model}")
+
 ############################ DATA ########################
 
 ### GENERATORS
@@ -424,12 +430,6 @@ test_dataset = torchvision.datasets.MNIST(
     transform=transform,
     download=True
 )
-
-### INSTANTIATE THE MODEL AND MOVE TO GPU ###
-
-log(f"PREPARE MODEL on device={device}")
-model = Model(SEED, GATE_ARCHITECTURE, INTERCONNECT_ARCHITECTURE, NUMBER_OF_CATEGORIES, INPUT_SIZE).to(device)
-log(f"model={model}")
 
 ### SPLIT TRAIN DATASET ###
 

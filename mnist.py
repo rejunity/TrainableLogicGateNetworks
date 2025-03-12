@@ -147,8 +147,24 @@ def binarize_inplace(x, dim=-1, bin_value=1):
     x.data.scatter_(dim=dim, index=ones_at.unsqueeze(dim), value=bin_value)
 
 ############################ MODEL ########################
+class SparseInterconnect(nn.Module):
+    def __init__(self, inputs, outputs, name=''):
+        super(SparseInterconnect, self).__init__()
+        self.c = nn.Parameter(torch.zeros((inputs, outputs), dtype=torch.float32))
+        nn.init.normal_(self.c, mean=0.0, std=1)
+        self.name = name
+        self.binarized = False
+    
+    def forward(self, x):
+        batch_size = x.shape[0]
+        connections = F.softmax(self.c, dim=0) if not self.binarized else self.c
+        return torch.matmul(x, connections)
 
-class LearnableInterconnect(nn.Module):
+    def binarize(self, bin_value=1):
+        binarize_inplace(self.c, dim=0, bin_value=bin_value)
+        self.binarized = True
+
+
 class BlockBottleneckedInterconnect(nn.Module):
     def __init__(self, layer_inputs, layer_outputs, block_inputs, block_outputs, name=''):
         super(BlockBottleneckedInterconnect, self).__init__()
@@ -279,7 +295,7 @@ class Model(nn.Module):
             if   len(interconnect_params) == 1:
                 interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],                                       name=f"i_{layer_idx}")
             else:
-                layers_.append(LearnableInterconnect(prev_gates, layer_gates*2, layer_interconnect[0], layer_interconnect[1], f"i_{layer_idx}"))
+                interconnect = SparseInterconnect           (layer_inputs, layer_gates*2,                                                                            name=f"i_{layer_idx}")
             layers_.append(interconnect)
             layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
             layer_inputs = layer_gates

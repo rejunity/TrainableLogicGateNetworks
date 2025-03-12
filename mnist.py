@@ -24,13 +24,13 @@ import torchvision.transforms as transforms
 from torch.utils.data import random_split
 from datetime import datetime
 import time
-import torch.profiler
 import os
 import socket
 from zoneinfo import ZoneInfo
 import wandb
 import ast
 
+import torch.profiler
 ############################ CONFIG ########################
 
 from dotenv import dotenv_values
@@ -75,12 +75,15 @@ SUPPRESS_PASSTHROUGH = config.get("SUPPRESS_PASSTHROUGH", "0").lower() in ("true
 SUPPRESS_CONST = config.get("SUPPRESS_CONST", "0").lower() in ("true", "1", "yes")
 TENSION_REGULARIZATION = float(config.get("TENSION_REGULARIZATION", -1))
 
+PROFILE = config.get("PROFILE", "0").lower() in ("true", "1", "yes")
+if PROFILE: prof = torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], record_shapes=True)
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE",
-               "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",]
+               "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION", "PROFILE"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
 # Making sure sensitive configs are not logged
@@ -559,6 +562,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay
 time_start = time.time()
 
 for i in range(TRAINING_STEPS):
+    if PROFILE and i > 10: prof.start()
     indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
     x = train_images[indices]
     y = train_labels[indices]
@@ -653,6 +657,8 @@ for i in range(TRAINING_STEPS):
              "gate_perc_xor": model.compute_selected_gates_fraction([6, 9])*100.,
              "gate_perc_or": model.compute_selected_gates_fraction([7, 8])*100.,
             })
+    if PROFILE: torch.cuda.synchronize()
+    if PROFILE and i > 10: prof.stop()
 
 
 time_end = time.time()
@@ -692,3 +698,9 @@ import asyncio
 (TG_TOKEN and TG_CHATID) and asyncio.run(Bot(token=TG_TOKEN).send_message(chat_id=int(TG_CHATID), text=LOG_NAME))
 
 WANDB_KEY and wandb.finish()
+
+if PROFILE:
+    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
+    print("-"*80)
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    prof.export_chrome_trace(f"{LOG_NAME}_profile.json")

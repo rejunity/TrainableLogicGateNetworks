@@ -191,6 +191,58 @@ class BlockBottleneckedInterconnect(nn.Module):
         binarize_inplace(self.c, dim=1, bin_value=bin_value)
         self.binarized = True
 
+
+class BlockSparseInterconnect(nn.Module):
+    def __init__(self, layer_inputs, layer_outputs, granularity, name=''):
+        super(BlockSparseInterconnect, self).__init__()
+        self.layer_inputs = layer_inputs
+        self.layer_outputs = layer_outputs
+        # simple:
+        # 1024:[32x32]x32 ==transpose=> 32x[32x32]:1024
+        # 1280:[32x32]x40 ==transpose=> 32x[40x40]:1280
+        # 1300:[25x25]x52 ==transpose=> 25x[52x52]:1300                                                                         32500+67600=100100 vs 1300x1300 ~~ 5.93%
+        # 1300:[50x50]x26 ==transpose=> 50x[26x26]:1300                                                                         65000+33800=98800 vs 1300x1300  ~~ 5.93%
+        #   IN:[GGxGG]xII ==transpose=> GGx[IIxYY]:OUT   where GG=granularity, II=IN//granularity, YY=OUT/granularity
+        # complex:
+        #  256:[64x325]x4 ==transpose=> 325x[4x4]:1300                                                                          83200+5200=88400 vs 256x1300    ~~ 26.56%
+        #   IN:[GGxBB]xAA ==transpose=> BBx[AAxAA]:OUT   where GG=granularity, AA=IN//granularity, BB=OUT/AA
+        self.n_blocks_in_sub_layer_1 = layer_inputs // granularity
+        self.inputs_per_block_in_sub_layer_1  = layer_inputs // self.n_blocks_in_sub_layer_1
+        self.inputs_per_block_in_sub_layer_2  = self.n_blocks_in_sub_layer_1
+        # self.n_blocks_in_sub_layer_2 = granularity # simple
+        # self.outputs_per_block_in_sub_layer_1 = granularity # simple
+        # self.outputs_per_block_in_sub_layer_2 = layer_outputs // granularity # simple
+        self.n_blocks_in_sub_layer_2 = layer_outputs // self.n_blocks_in_sub_layer_1 # complex
+        self.outputs_per_block_in_sub_layer_1 = self.n_blocks_in_sub_layer_2 # complex
+        self.outputs_per_block_in_sub_layer_2 = layer_outputs // self.n_blocks_in_sub_layer_2 # complex
+
+        self.name = name
+        self.binarized = False
+        
+        assert layer_inputs  == self.n_blocks_in_sub_layer_1 * self.inputs_per_block_in_sub_layer_1,  f"name={self.name}, sub(1): n_blocks={self.n_blocks_in_sub_layer_1} inputs_per_block={self.inputs_per_block_in_sub_layer_1}"
+        assert layer_outputs == self.n_blocks_in_sub_layer_2 * self.outputs_per_block_in_sub_layer_2, f"name={self.name}, sub(2): n_blocks={self.n_blocks_in_sub_layer_2} outputs_per_block={self.outputs_per_block_in_sub_layer_2}"
+        assert self.n_blocks_in_sub_layer_1 * self.outputs_per_block_in_sub_layer_1 == self.n_blocks_in_sub_layer_2 * self.inputs_per_block_in_sub_layer_2, f"name={self.name}, sub(1): n_blocks={self.n_blocks_in_sub_layer_1} outputs_per_block={self.outputs_per_block_in_sub_layer_1}, " + \
+                                                                                                                                                                              f"sub(2): n_blocks={self.n_blocks_in_sub_layer_2}  inputs_per_block={self.inputs_per_block_in_sub_layer_2}"
+        self.c_sub_layer_1 = nn.Parameter(torch.zeros((self.n_blocks_in_sub_layer_1, self.inputs_per_block_in_sub_layer_1, self.outputs_per_block_in_sub_layer_1), dtype=torch.float32))
+        self.c_sub_layer_2 = nn.Parameter(torch.zeros((self.n_blocks_in_sub_layer_2, self.inputs_per_block_in_sub_layer_2, self.outputs_per_block_in_sub_layer_2), dtype=torch.float32))
+        nn.init.normal_(self.c_sub_layer_1, mean=0.0, std=1)
+        nn.init.normal_(self.c_sub_layer_2, mean=0.0, std=1)
+    
+    def forward(self, x):
+        conn_1 = F.softmax(self.c_sub_layer_1, dim=1) if not self.binarized else self.c_sub_layer_1
+        conn_2 = F.softmax(self.c_sub_layer_2, dim=1) if not self.binarized else self.c_sub_layer_2
+
+        x_reshaped = x.view(-1, self.n_blocks_in_sub_layer_1, self.inputs_per_block_in_sub_layer_1)
+        y = torch.einsum('bnm,nmo->bno', x_reshaped, conn_1)
+        y_transposed = torch.transpose(y, 1, 2)
+        output = torch.einsum('bnm,nmo->bno', y_transposed, conn_2)
+        return output.reshape(x.shape[0], self.layer_outputs)
+
+    def binarize(self, bin_value=1):
+        binarize_inplace(self.c_sub_layer_1, dim=1, bin_value=bin_value)
+        binarize_inplace(self.c_sub_layer_2, dim=1, bin_value=bin_value)
+        self.binarized = True
+
     # test
     # t1 = torch.tensor( [1,0,1,0, 
     #                     0,1,0,1], dtype=torch.float).view(1,8)
@@ -294,6 +346,8 @@ class Model(nn.Module):
         for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
             if   len(interconnect_params) == 1:
                 interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],                                       name=f"i_{layer_idx}")
+            elif len(interconnect_params) == 2:
+                interconnect = BlockBottleneckedInterconnect(layer_inputs, layer_gates*2, block_inputs=interconnect_params[0], block_outputs=interconnect_params[1], name=f"i_{layer_idx}")
             else:
                 interconnect = SparseInterconnect           (layer_inputs, layer_gates*2,                                                                            name=f"i_{layer_idx}")
             layers_.append(interconnect)

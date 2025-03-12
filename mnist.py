@@ -523,21 +523,6 @@ def get_validate(default_model):
 def get_binarized_model(model=None, bin_value=1):
     return model.clone_and_binarize(device, bin_value)
 
-    # model_binarized = Model(model.seed, model.gate_architecture, model.interconnect_architecture, model.number_of_categories, model.input_size).to(device)
-    # model_binarized.load_state_dict(model.state_dict())
-
-    # for model_binarized_layer in model_binarized.layers:
-    #     if hasattr(model_binarized_layer, 'w'):
-    #         ones_at = torch.argmax(model_binarized_layer.w.data, dim=0)
-    #         model_binarized_layer.w.data.zero_()
-    #         model_binarized_layer.w.data.scatter_(dim=0, index=ones_at.unsqueeze(0), value=bin_value)
-    #     if hasattr(model_binarized_layer, 'c'):
-    #         ones_at = torch.argmax(model_binarized_layer.c.data, dim=1)
-    #         model_binarized_layer.c.data.zero_()
-    #         model_binarized_layer.c.data.scatter_(dim=1, index=ones_at.unsqueeze(1), value=bin_value)
-    #     model_binarized_layer.binarized = True
-    # return model_binarized
-
 def l1_topk(weights_after_softmax, k=4, special_dim=0): # but goes to 1 when binarized; 0 when uniform
     # test
     # t1 = torch.zeros([8,32,75]); l1_topk(F.softmax(t1,dim=1),special_dim=1) # should get zero

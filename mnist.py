@@ -77,6 +77,7 @@ TENSION_REGULARIZATION = float(config.get("TENSION_REGULARIZATION", -1))
 
 PROFILE = config.get("PROFILE", "0").lower() in ("true", "1", "yes")
 if PROFILE: prof = torch.profiler.profile(schedule=torch.profiler.schedule(skip_first=10, wait=3, warmup=1, active=1, repeat=1000), record_shapes=True, with_flops=True) #, with_stack=True, with_modules=True)
+PROFILER_ROWS = int(config.get("PROFILER_ROWS", 20))
 
 FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 
@@ -698,10 +699,10 @@ import asyncio
 WANDB_KEY and wandb.finish()
 
 if PROFILE:
-    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
-    print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cpu_time_total", row_limit=20))
+    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=PROFILER_ROWS))
+    print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cpu_time_total", row_limit=PROFILER_ROWS))
     if device.type == "cuda":
         print("-"*80)
-        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
-        print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=20))
+        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=PROFILER_ROWS))
+        print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=PROFILER_ROWS))
     prof.export_chrome_trace(f"{LOG_NAME}_profile.json")

@@ -642,8 +642,10 @@ for i in range(TRAINING_STEPS):
              "gate_perc_xor": model.compute_selected_gates_fraction([6, 9])*100.,
              "gate_perc_or": model.compute_selected_gates_fraction([7, 8])*100.,
             })
-    if PROFILE: torch.cuda.synchronize()
+    if PROFILE:
         torch.cpu.synchronize()
+        if   device == "cuda": torch.cuda.synchronize()
+        elif device == "mps":  torch.mps.synchronize()
     if PROFILE: prof.step()
 if PROFILE: prof.stop()
 

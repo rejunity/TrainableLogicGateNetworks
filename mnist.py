@@ -201,6 +201,11 @@ class BlockBottleneckedInterconnect(nn.Module):
         binarize_inplace(self.c, dim=1, bin_value=bin_value)
         self.binarized = True
 
+    def __repr__(self):
+        fc_params = self.layer_inputs * self.layer_outputs
+        params  = self.n_blocks * self.block_inputs * self.block_outputs
+        return f"BlockSparseInterconnect(params={(params * 100 / fc_params):.1f}%, connection_length<{self.block_inputs * 100 / self.layer_inputs}%)"
+
 
 class BlockSparseInterconnect(nn.Module):
     def __init__(self, layer_inputs, layer_outputs, granularity, name=''):
@@ -254,6 +259,11 @@ class BlockSparseInterconnect(nn.Module):
         binarize_inplace(self.c_sub_layer_2, dim=1, bin_value=bin_value)
         self.binarized = True
 
+    def __repr__(self):
+        fc_params = self.layer_inputs * self.layer_outputs
+        params  = self.n_blocks_in_sub_layer_1 * self.inputs_per_block_in_sub_layer_1 * self.outputs_per_block_in_sub_layer_1 + \
+                  self.n_blocks_in_sub_layer_2 * self.inputs_per_block_in_sub_layer_2 * self.outputs_per_block_in_sub_layer_2
+        return f"BlockSparseInterconnect({(params * 100 / fc_params):.1f}%)"
     # test
     # t1 = torch.tensor( [1,0,1,0, 
     #                     0,1,0,1], dtype=torch.float).view(1,8)

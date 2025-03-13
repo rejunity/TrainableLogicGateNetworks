@@ -689,5 +689,7 @@ WANDB_KEY and wandb.finish()
 if PROFILE:
     print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
     print("-"*80)
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    if device == "cuda":
+        print("-"*80)
+        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
     prof.export_chrome_trace(f"{LOG_NAME}_profile.json")

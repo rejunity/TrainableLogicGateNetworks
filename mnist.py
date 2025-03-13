@@ -158,6 +158,7 @@ class SparseInterconnect(nn.Module):
         self.name = name
         self.binarized = False
     
+    @torch.profiler.record_function("mnist::Sparse::FWD")
     def forward(self, x):
         batch_size = x.shape[0]
         connections = F.softmax(self.c, dim=0) if not self.binarized else self.c
@@ -184,6 +185,7 @@ class BlockBottleneckedInterconnect(nn.Module):
         self.c = nn.Parameter(torch.zeros((self.n_blocks, block_inputs, block_outputs), dtype=torch.float32))
         nn.init.normal_(self.c, mean=0.0, std=1)
     
+    @torch.profiler.record_function("mnist::BlockBottlenecked::FWD")
     def forward(self, x):
         x_reshaped = x.view(-1, self.n_blocks, self.block_inputs)
         connections = F.softmax(self.c, dim=1) if not self.binarized else self.c
@@ -231,6 +233,7 @@ class BlockSparseInterconnect(nn.Module):
         nn.init.normal_(self.c_sub_layer_1, mean=0.0, std=1)
         nn.init.normal_(self.c_sub_layer_2, mean=0.0, std=1)
     
+    @torch.profiler.record_function("mnist::BlockSparse::FWD")
     def forward(self, x):
         conn_1 = F.softmax(self.c_sub_layer_1, dim=1) if not self.binarized else self.c_sub_layer_1
         conn_2 = F.softmax(self.c_sub_layer_2, dim=1) if not self.binarized else self.c_sub_layer_2
@@ -278,6 +281,7 @@ class LearnableGate16Array(nn.Module):
         self.binarized = False
         nn.init.normal_(self.w, mean=0.0, std=1)
 
+    @torch.profiler.record_function("mnist::LearnableGate16::FWD")
     def forward(self, x):
         batch_size = x.shape[0]
         x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
@@ -358,6 +362,7 @@ class Model(nn.Module):
             layer_inputs = layer_gates
         self.layers = nn.ModuleList(layers_)
 
+    @torch.profiler.record_function("mnist::Model::FWD")
     def forward(self, X):
         for layer_idx in range(0, len(self.layers)):
             X = self.layers[layer_idx](X)

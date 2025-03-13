@@ -143,7 +143,7 @@ try:
                     "mps"  if torch.backends.mps.is_available() and not FORCE_CPU else 
                     "cpu")
 except:
-    device = "cpu"
+    device = torch.device("cpu")
 WANDB_KEY and wandb.log({"device": str(device)})
 
 #################### TENSOR BINARIZATION ##################
@@ -653,8 +653,8 @@ for i in range(TRAINING_STEPS):
             })
     if PROFILE:
         torch.cpu.synchronize()
-        if   device == "cuda": torch.cuda.synchronize()
-        elif device == "mps":  torch.mps.synchronize()
+        if   device.type == "cuda": torch.cuda.synchronize()
+        elif device.type == "mps":  torch.mps.synchronize()
     if PROFILE: prof.step()
 if PROFILE: prof.stop()
 
@@ -700,7 +700,7 @@ WANDB_KEY and wandb.finish()
 if PROFILE:
     print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
     print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cpu_time_total", row_limit=20))
-    if device == "cuda":
+    if device.type == "cuda":
         print("-"*80)
         print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
         print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=20))

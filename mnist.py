@@ -76,7 +76,7 @@ SUPPRESS_CONST = config.get("SUPPRESS_CONST", "0").lower() in ("true", "1", "yes
 TENSION_REGULARIZATION = float(config.get("TENSION_REGULARIZATION", -1))
 
 PROFILE = config.get("PROFILE", "0").lower() in ("true", "1", "yes")
-if PROFILE: prof = torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], record_shapes=True)
+if PROFILE: prof = torch.profiler.profile(schedule=torch.profiler.schedule(skip_first=10, wait=3, warmup=1, active=1, repeat=1000), record_shapes=True, with_flops=True) #, with_stack=True, with_modules=True)
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
@@ -546,8 +546,8 @@ log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
 time_start = time.time()
 
+if PROFILE: prof.start()
 for i in range(TRAINING_STEPS):
-    if PROFILE and i > 10: prof.start()
     indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
     x = train_images[indices]
     y = train_labels[indices]
@@ -643,7 +643,9 @@ for i in range(TRAINING_STEPS):
              "gate_perc_or": model.compute_selected_gates_fraction([7, 8])*100.,
             })
     if PROFILE: torch.cuda.synchronize()
-    if PROFILE and i > 10: prof.stop()
+        torch.cpu.synchronize()
+    if PROFILE: prof.step()
+if PROFILE: prof.stop()
 
 
 time_end = time.time()

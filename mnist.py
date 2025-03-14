@@ -593,6 +593,11 @@ for i in range(TRAINING_STEPS):
                 if hasattr(model_layer, 'c'):
                     conn_weights_after_softmax = F.softmax(model_layer.c, dim=0)
                     tension_loss += torch.sum((1 - conn_weights_after_softmax) * conn_weights_after_softmax)
+                if hasattr(model_layer, 'c_sub_layer_1') and hasattr(model_layer, 'c_sub_layer_2'):
+                    conn_1 = F.softmax(model_layer.c_sub_layer_1, dim=1)
+                    conn_2 = F.softmax(model_layer.c_sub_layer_2, dim=1)
+                    tension_loss += torch.sum((1 - conn_1) * conn_1)
+                    tension_loss += torch.sum((1 - conn_2) * conn_2)
                 if hasattr(model_layer, 'w'):
                     gate_weights_after_softmax = F.softmax(model_layer.w, dim=0)
                     tension_loss += torch.sum((1 - gate_weights_after_softmax) * gate_weights_after_softmax)
@@ -640,6 +645,17 @@ for i in range(TRAINING_STEPS):
                 top2c += l1_topk(weights_after_softmax,k=2,special_dim=1)
                 top4c += l1_topk(weights_after_softmax,k=4,special_dim=1)
                 top8c += l1_topk(weights_after_softmax,k=8,special_dim=1)
+            if hasattr(model_layer, 'c_sub_layer_1') and hasattr(model_layer, 'c_sub_layer_2'):
+                conn_1 = F.softmax(model_layer.c_sub_layer_1, dim=1)
+                conn_2 = F.softmax(model_layer.c_sub_layer_2, dim=1)
+                top1c += 0.5*l1_topk(conn_1,k=1,special_dim=1)
+                top2c += 0.5*l1_topk(conn_1,k=2,special_dim=1)
+                top4c += 0.5*l1_topk(conn_1,k=4,special_dim=1)
+                top8c += 0.5*l1_topk(conn_1,k=8,special_dim=1)
+                top1c += 0.5*l1_topk(conn_2,k=1,special_dim=1)
+                top2c += 0.5*l1_topk(conn_2,k=2,special_dim=1)
+                top4c += 0.5*l1_topk(conn_2,k=4,special_dim=1)
+                top8c += 0.5*l1_topk(conn_2,k=8,special_dim=1)
         top1w /= len(model.layers)
         top2w /= len(model.layers)
         top4w /= len(model.layers)

@@ -80,6 +80,7 @@ if PROFILE: prof = torch.profiler.profile(schedule=torch.profiler.schedule(skip_
 PROFILER_ROWS = int(config.get("PROFILER_ROWS", 20))
 
 FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
+COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
@@ -87,7 +88,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
-               "PROFILE", "FORCE_CPU"]
+               "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
 
 # Making sure sensitive configs are not logged
@@ -419,6 +420,9 @@ class Model(nn.Module):
 
 log(f"PREPARE MODEL on device={device}")
 model = Model(SEED, GATE_ARCHITECTURE, INTERCONNECT_ARCHITECTURE, NUMBER_OF_CATEGORIES, INPUT_SIZE).to(device)
+if COMPILE_MODEL:
+    torch.set_float32_matmul_precision('high')
+    model = torch.compile(model)
 log(f"model={model}")
 
 ############################ DATA ########################

@@ -250,7 +250,7 @@ class BlockSparseInterconnect(nn.Module):
         conn_2 = F.softmax(self.c_sub_layer_2, dim=1) if not self.binarized else self.c_sub_layer_2
 
         x_reshaped = x.view(-1, self.n_blocks_in_sub_layer_1, self.inputs_per_block_in_sub_layer_1)
-        output = torch.einsum('bnm,nmo,ond->bod', x_reshaped, conn_1, conn_2)
+        output = torch.einsum("bni,nim,mno->bmo", x_reshaped, conn_1, conn_2)
         return output.reshape(x.shape[0], self.layer_outputs)
 
     def binarize(self, bin_value=1):

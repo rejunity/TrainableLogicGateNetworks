@@ -342,7 +342,7 @@ class LearnableGate16Array(nn.Module):
         elif OPT_GATE16_CODEPATH == 2:
             return self.forward2(x)
         elif OPT_GATE16_CODEPATH == 3:
-            return self.forward2(x)
+            return self.forward3(x)
         else:
             assert torch.allclose(self.forwardVanilla(x), self.forward1(x), atol=1e-3)  
             assert torch.allclose(self.forwardVanilla(x), self.forward2(x), atol=1e-3)  

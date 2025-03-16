@@ -82,6 +82,8 @@ PROFILER_ROWS = int(config.get("PROFILER_ROWS", 20))
 FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
+OPT_GATE16_CODEPATH = int(config.get("OPT_GATE16_CODEPATH", 2))
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
@@ -295,10 +297,63 @@ class LearnableGate16Array(nn.Module):
         self.binarized = False
         nn.init.normal_(self.w, mean=0.0, std=1)
 
+        # g0  = 
+        # g1  =         AB
+        # g2  =   A    -AB
+        # g3  =   A
+        # g4  =      B -AB
+        # g5  =      B
+        # g6  =   A  B-2AB
+        # g7  =   A  B -AB
+        # g8  = 1-A -B  AB
+        # g9  = 1-A -B 2AB
+        # g10 = 1   -B
+        # g11 = 1   -B  AB
+        # g12 = 1-A
+        # g13 = 1-A     AB
+        # g14 = 1      -AB
+        # g15 = 1
+
+        W = torch.zeros(4, 16, device=device)
+        # 1 weights
+        W[0, 8:16] =            1
+        # A weights
+        W[1, [2, 3,  6,  7]] =  1
+        W[1, [8, 9, 12, 13]] = -1
+        # B weights
+        W[2, [4, 5,  6,  7]] =  1
+        W[2, [8, 9, 10, 11]] = -1
+        # A*B weights
+        W[3, 1] =               1
+        W[3, 6] =              -2
+        W[3, [2, 4, 7,14]] =   -1
+        W[3, [1, 8,11,13]] =    1
+        W[3, 9] =               2 
+
+        self.W16_to_4 = W
+
+
     @torch.profiler.record_function("mnist::LearnableGate16::FWD")
     def forward(self, x):
+        if OPT_GATE16_CODEPATH == 0:
+            return self.forwardVanilla(x)
+        elif OPT_GATE16_CODEPATH == 1:
+            return self.forward1(x)
+        elif OPT_GATE16_CODEPATH == 2:
+            return self.forward2(x)
+        elif OPT_GATE16_CODEPATH == 3:
+            return self.forward2(x)
+        else:
+            assert torch.allclose(self.forwardVanilla(x), self.forward1(x), atol=1e-3)  
+            assert torch.allclose(self.forwardVanilla(x), self.forward2(x), atol=1e-3)  
+            assert torch.allclose(self.forwardVanilla(x), self.forward3(x), atol=1e-3)
+            return self.forwardVanilla(x)
+
+    def forwardVanilla(self, x):
         batch_size = x.shape[0]
         x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
+
+        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w # [16, number_of_gates]
 
         A = x[:,:,0]          # [batch_size, number_of_gates]
         A = A.transpose(0,1)  # [number_of_gates, batch_size]
@@ -337,10 +392,45 @@ class LearnableGate16Array(nn.Module):
             ], dim=0) # [C, number_of_gates, N]
         assert gates.dim() > 1
         if gates.dim() == 2:
-            gates = gates.unsqueeze(dim=1)                    # broadcast [C,N] -> [C,1,N]; C=16, N=batch_size
-        x = (gates * weights.unsqueeze(dim=-1)).sum(dim=0) # [C,W,N] .* (broadcast [C,W] -> [C,W,1]) =[sum-over-C]=> [W,N]
+            gates = gates.unsqueeze(dim=1)                  # broadcast [C,N] -> [C,1,N]; C=16, N=batch_size
+        x = (gates * weights.unsqueeze(dim=-1)).sum(dim=0)  # [C,W,N] .* (broadcast [C,W] -> [C,W,1]) =[sum-over-C]=> [W,N]
         return x.transpose(0,1)
-   
+
+    def forward1(self, x):
+        batch_size = x.shape[0]
+        x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
+
+        A = x[:,:,0] # [batch_size, number_of_gates]
+        B = x[:,:,1] # [batch_size, number_of_gates]
+        
+        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w
+        weights = torch.matmul(self.W16_to_4, weights) # [4, number_of_gates]
+        return weights[0,:] + weights[1,:] * A + weights[2,:] * B + weights[3,:] * A * B
+
+    def forward2(self, x):
+        batch_size = x.shape[0]
+        x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
+
+        A = x[:,:,0] # [batch_size, number_of_gates]
+        B = x[:,:,1] # [batch_size, number_of_gates]
+        
+        weights_t = F.softmax(self.w, dim=0).transpose(0,1) if not self.binarized else self.w.transpose(0,1)
+        weights = torch.matmul(weights_t, self.W16_to_4.transpose(0,1))  # [number_of_gates, 4]
+        result = weights * torch.stack([torch.ones_like(A), A, B, A*B], dim=2)
+        return result.sum(dim=2)
+
+    def forward3(self, x):
+        batch_size = x.shape[0]
+        x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
+
+        A = x[:,:,0]          # [batch_size, number_of_gates]
+        B = x[:,:,1]          # [batch_size, number_of_gates]
+        
+        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w
+        weights = torch.matmul(self.W16_to_4, weights) # [4, number_of_gates]
+        result = weights * torch.stack([torch.ones_like(A), A, B, A*B], dim=1)
+        return result.sum(dim=1)
+
     def binarize(self, bin_value=1):
         binarize_inplace(self.w, dim=0, bin_value=bin_value)
         self.binarized = True

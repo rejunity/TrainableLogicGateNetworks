@@ -36,6 +36,8 @@ import torch.profiler
 from dotenv import dotenv_values
 config = { **dotenv_values(".env"), **os.environ }
 
+# PASS_INPUT_TO_ALL_LAYERS=1 C_INIT="XAVIER_U" C_SPARSITY=10 G_SPARSITY=1 OPT_GATE16_CODEPATH=3 KINETO_LOG_LEVEL=99 GATE_ARCHITECTURE="[2000,2000]" INTERCONNECT_ARCHITECTURE="[]" PRINTOUT_EVERY=211 EPOCHS=300 uv run mnist.py
+
 LOG_TAG = config.get("LOG_TAG", "MNIST")
 TIMEZONE = config.get("TIMEZONE", "UTC")
 PAPERTRAIL_HOST = config.get("PAPERTRAIL_HOST")
@@ -53,14 +55,14 @@ ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true
 
 SEED = config.get("SEED", random.randint(0, 1024*1024))
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[1300,1300,1300]"))
-INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[32, 325], [26, 52], [26, 52]]"))
+GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[2000, 2000]")) # previous: "[1300,1300,1300]"))
+INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[]")) # previous: "[[32, 325], [26, 52], [26, 52]]"))
 if not INTERCONNECT_ARCHITECTURE or INTERCONNECT_ARCHITECTURE == []:
     INTERCONNECT_ARCHITECTURE = [[] for g in GATE_ARCHITECTURE]
 assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
-EPOCHS = int(config.get("EPOCHS", 50))
+EPOCHS = int(config.get("EPOCHS", 300)) # previous: 50
 EPOCH_STEPS = round(54_000 / BATCH_SIZE) # 54K train /6K val/10K test
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS // 4))
@@ -84,11 +86,19 @@ COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
 OPT_GATE16_CODEPATH = int(config.get("OPT_GATE16_CODEPATH", 2))
 
+C_INIT = config.get("C_INIT", "XAVIER_U") # NORMAL, UNIFORM, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
+G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
+C_SPARSITY = float(config.get("C_SPARSITY", 10.0))
+G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
+
+PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "1").lower() in ("true", "1", "yes")
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE",
+               "C_INIT", "G_INIT", "C_SPARSITY", "G_SPARSITY", "PASS_INPUT_TO_ALL_LAYERS",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -162,14 +172,29 @@ class SparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, name=''):
         super(SparseInterconnect, self).__init__()
         self.c = nn.Parameter(torch.zeros((inputs, outputs), dtype=torch.float32))
-        nn.init.normal_(self.c, mean=0.0, std=1)
+        if C_INIT == "XAVIER_N":
+            nn.init.xavier_normal_(self.c, gain=nn.init.calculate_gain('sigmoid'))
+        elif C_INIT == "XAVIER_U":
+            nn.init.xavier_uniform_(self.c, gain=nn.init.calculate_gain('sigmoid'))
+        elif C_INIT == "KAIMING_OUT_N":
+            nn.init.kaiming_normal_(self.c, mode="fan_out", nonlinearity='sigmoid')
+        elif C_INIT == "KAIMING_OUT_U":
+            nn.init.kaiming_uniform_(self.c, mode="fan_out", nonlinearity='sigmoid')
+        elif C_INIT == "KAIMING_IN_N":
+            nn.init.kaiming_normal_(self.c, mode="fan_in", nonlinearity='sigmoid')
+        elif C_INIT == "KAIMING_IN_U":
+            nn.init.kaiming_uniform_(self.c, mode="fan_in", nonlinearity='sigmoid')
+        elif C_INIT == "UNIFORM":
+            nn.init.uniform_(self.c, a=0.0, b=1.0)
+        else:
+            nn.init.normal_(self.c, mean=0.0, std=1)
         self.name = name
         self.binarized = False
     
     @torch.profiler.record_function("mnist::Sparse::FWD")
     def forward(self, x):
         batch_size = x.shape[0]
-        connections = F.softmax(self.c, dim=0) if not self.binarized else self.c
+        connections = F.softmax(self.c * C_SPARSITY, dim=0) if not self.binarized else self.c
         return torch.matmul(x, connections)
 
     def binarize(self, bin_value=1):
@@ -295,7 +320,11 @@ class LearnableGate16Array(nn.Module):
         self.zeros = torch.empty(0)
         self.ones = torch.empty(0)
         self.binarized = False
-        nn.init.normal_(self.w, mean=0.0, std=1)
+        nn.init.normal_(self.w, mean=0, std=1)
+        if G_INIT == "UNIFORM":
+            nn.init.uniform_(self.w, a=0.0, b=1.0)
+        else:
+            nn.init.normal_(self.w, mean=0.0, std=1)
 
         # g0  = 
         # g1  =         AB
@@ -353,7 +382,7 @@ class LearnableGate16Array(nn.Module):
         batch_size = x.shape[0]
         x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
 
-        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w # [16, number_of_gates]
+        weights = F.softmax(self.w * G_SPARSITY, dim=0) if not self.binarized else self.w # [16, number_of_gates]
 
         A = x[:,:,0]          # [batch_size, number_of_gates]
         A = A.transpose(0,1)  # [number_of_gates, batch_size]
@@ -403,7 +432,7 @@ class LearnableGate16Array(nn.Module):
         A = x[:,:,0] # [batch_size, number_of_gates]
         B = x[:,:,1] # [batch_size, number_of_gates]
         
-        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w
+        weights = F.softmax(self.w * G_SPARSITY, dim=0) if not self.binarized else self.w
         weights = torch.matmul(self.W16_to_4, weights) # [4, number_of_gates]
         return weights[0,:] + weights[1,:] * A + weights[2,:] * B + weights[3,:] * A * B
 
@@ -414,7 +443,7 @@ class LearnableGate16Array(nn.Module):
         A = x[:,:,0] # [batch_size, number_of_gates]
         B = x[:,:,1] # [batch_size, number_of_gates]
         
-        weights_t = F.softmax(self.w, dim=0).transpose(0,1) if not self.binarized else self.w.transpose(0,1)
+        weights_t = F.softmax(self.w * G_SPARSITY, dim=0).transpose(0,1) if not self.binarized else self.w.transpose(0,1)
         weights = torch.matmul(weights_t, self.W16_to_4.transpose(0,1))  # [number_of_gates, 4]
         result = weights * torch.stack([torch.ones_like(A), A, B, A*B], dim=2)
         return result.sum(dim=2)
@@ -426,7 +455,7 @@ class LearnableGate16Array(nn.Module):
         A = x[:,:,0]          # [batch_size, number_of_gates]
         B = x[:,:,1]          # [batch_size, number_of_gates]
         
-        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w
+        weights = F.softmax(self.w * G_SPARSITY, dim=0) if not self.binarized else self.w
         weights = torch.matmul(self.W16_to_4, weights) # [4, number_of_gates]
         result = weights * torch.stack([torch.ones_like(A), A, B, A*B], dim=1)
         return result.sum(dim=1)
@@ -464,12 +493,17 @@ class Model(nn.Module):
             layers_.append(interconnect)
             layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
             layer_inputs = layer_gates
+            if PASS_INPUT_TO_ALL_LAYERS:
+                layer_inputs += input_size
         self.layers = nn.ModuleList(layers_)
 
     @torch.profiler.record_function("mnist::Model::FWD")
-    def forward(self, X):
+    def forward(self, I):
+        X = I
         for layer_idx in range(0, len(self.layers)):
             X = self.layers[layer_idx](X)
+            if PASS_INPUT_TO_ALL_LAYERS and type(self.layers[layer_idx]) is LearnableGate16Array and layer_idx < len(self.layers)-1:
+                X = torch.cat([X, I], dim=-1)
 
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         X = F.softmax(X, dim=-1)

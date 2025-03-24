@@ -84,9 +84,6 @@ PROFILER_ROWS = int(config.get("PROFILER_ROWS", 20))
 FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
-OPT_GATE16_CODEPATH = int(config.get("OPT_GATE16_CODEPATH", 2))
-
-C_INIT = config.get("C_INIT", "XAVIER_U") # NORMAL, UNIFORM, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
 C_SPARSITY = float(config.get("C_SPARSITY", 10.0))
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
@@ -201,34 +198,6 @@ class SparseInterconnect(nn.Module):
         binarize_inplace(self.c, dim=0, bin_value=bin_value)
         self.binarized = True
 
-
-class BlockBottleneckedInterconnect(nn.Module):
-    def __init__(self, layer_inputs, layer_outputs, block_inputs, block_outputs, name=''):
-        super(BlockBottleneckedInterconnect, self).__init__()
-        self.layer_inputs = layer_inputs
-        self.layer_outputs = layer_outputs
-        self.block_inputs = block_inputs
-        self.block_outputs = block_outputs
-        self.name = name
-        self.binarized = False
-        
-        self.n_blocks = layer_inputs // block_inputs
-        assert self.n_blocks == layer_outputs // block_outputs, f"name={self.name}, n_blocks={self.n_blocks}, block_inputs={self.block_inputs}"
-        
-        self.c = nn.Parameter(torch.zeros((self.n_blocks, block_inputs, block_outputs), dtype=torch.float32))
-        nn.init.normal_(self.c, mean=0.0, std=1)
-    
-    @torch.profiler.record_function("mnist::BlockBottlenecked::FWD")
-    def forward(self, x):
-        x_reshaped = x.view(-1, self.n_blocks, self.block_inputs)
-        connections = F.softmax(self.c, dim=1) if not self.binarized else self.c
-        output = torch.einsum('bnm,nmo->bno', x_reshaped, connections)
-        return output.reshape(x.shape[0], self.layer_outputs)
-
-    def binarize(self, bin_value=1):
-        binarize_inplace(self.c, dim=1, bin_value=bin_value)
-        self.binarized = True
-
     def __repr__(self):
         fc_params = self.layer_inputs * self.layer_outputs
         params  = self.n_blocks * self.block_inputs * self.block_outputs
@@ -290,25 +259,6 @@ class BlockSparseInterconnect(nn.Module):
         params  = self.n_blocks_in_sub_layer_1 * self.inputs_per_block_in_sub_layer_1 * self.outputs_per_block_in_sub_layer_1 + \
                   self.n_blocks_in_sub_layer_2 * self.inputs_per_block_in_sub_layer_2 * self.outputs_per_block_in_sub_layer_2
         return f"BlockSparseInterconnect({(params * 100 / fc_params):.1f}%)"
-    # test
-    # t1 = torch.tensor( [1,0,1,0, 
-    #                     0,1,0,1], dtype=torch.float).view(1,8)
-    # li = BlockBottleneckedInterconnect(8,10,4,5) # n_blocks=2
-    # li.c.data = torch.zeros_like(li.c.data)
-    # li.binarized = True
-    # li.c.data[0,0,0] = 1.
-    # li.c.data[0,1,1] = 1.
-    # li.c.data[0,2,2] = 1.
-    # li.c.data[0,3,3] = 1.
-    # li.c.data[0,3,4] = 1.
-    # li.c.data[1,0,0] = 1.
-    # li.c.data[1,1,1] = 1.
-    # li.c.data[1,2,2] = 1.
-    # li.c.data[1,3,3] = 1.
-    # li.c.data[1,3,4] = 1.
-    # li(t1)
-    # assert torch.allclose(li(t1), torch.tensor([[1., 0., 1., 0., 0., 
-    #                                              0., 1., 0., 1., 1.]]))
 
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, name=''):
@@ -364,91 +314,17 @@ class LearnableGate16Array(nn.Module):
 
     @torch.profiler.record_function("mnist::LearnableGate16::FWD")
     def forward(self, x):
-        if OPT_GATE16_CODEPATH == 0:
-            return self.forwardVanilla(x)
-        elif OPT_GATE16_CODEPATH == 1:
-            return self.forward1(x)
-        elif OPT_GATE16_CODEPATH == 2:
-            return self.forward2(x)
-        elif OPT_GATE16_CODEPATH == 3:
-            return self.forward3(x)
-        else:
-            assert torch.allclose(self.forwardVanilla(x), self.forward1(x), atol=1e-3)  
-            assert torch.allclose(self.forwardVanilla(x), self.forward2(x), atol=1e-3)  
-            assert torch.allclose(self.forwardVanilla(x), self.forward3(x), atol=1e-3)
-            return self.forwardVanilla(x)
+        # batch_size = x.shape[0]
+        # x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
 
-    def forwardVanilla(self, x):
-        batch_size = x.shape[0]
-        x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
-
-        weights = F.softmax(self.w * G_SPARSITY, dim=0) if not self.binarized else self.w # [16, number_of_gates]
-
-        A = x[:,:,0]          # [batch_size, number_of_gates]
-        A = A.transpose(0,1)  # [number_of_gates, batch_size]
-        B = x[:,:,1]          # [batch_size, number_of_gates]
-        B = B.transpose(0,1)  # [number_of_gates, batch_size]
-
-        if self.zeros.shape != A.shape:
-            self.zeros = torch.zeros_like(A) # [number_of_gates, batch_size]
-        if self.ones.shape != A.shape:
-            self.ones = torch.ones_like(A)   # [number_of_gates, batch_size]
-            
-        # Numbered according to https://arxiv.org/pdf/2210.08277 table
-        AB = A*B # [number_of_gates, batch_size]*[number_of_gates, batch_size] -> [number_of_gates, batch_size]
-
-        g0  = self.zeros # all of g ~ [number_of_gates, batch_size]
-        g1  = AB
-        g2  = A - AB
-        g3  = A
-        g4  = B - AB
-        g5  = B
-        g7  = A + B - AB
-        g6  = g7    - AB            # A + B - 2 * A * B
-        g8  = self.ones - g7
-        g9  = self.ones - g6
-        g10 = self.ones - B
-        g11 = self.ones - g4
-        g12 = self.ones - A
-        g13 = self.ones - g2
-        g14 = self.ones - AB
-        g15 = self.ones
-
-        weights = F.softmax(self.w, dim=0) if not self.binarized else self.w # [16, number_of_gates]
-        gates = torch.stack([
-            g0, g1, g2, g3, g4, g5, g6, g7,
-            g8, g9, g10, g11, g12, g13, g14, g15
-            ], dim=0) # [C, number_of_gates, N]
-        assert gates.dim() > 1
-        if gates.dim() == 2:
-            gates = gates.unsqueeze(dim=1)                  # broadcast [C,N] -> [C,1,N]; C=16, N=batch_size
-        x = (gates * weights.unsqueeze(dim=-1)).sum(dim=0)  # [C,W,N] .* (broadcast [C,W] -> [C,W,1]) =[sum-over-C]=> [W,N]
-        return x.transpose(0,1)
-
-    def forward1(self, x):
-        batch_size = x.shape[0]
-        x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
-
-        A = x[:,:,0] # [batch_size, number_of_gates]
-        B = x[:,:,1] # [batch_size, number_of_gates]
+        # A = x[:,:,0] # [batch_size, number_of_gates]
+        # B = x[:,:,1] # [batch_size, number_of_gates]
         
-        weights = F.softmax(self.w * G_SPARSITY, dim=0) if not self.binarized else self.w
-        weights = torch.matmul(self.W16_to_4, weights) # [4, number_of_gates]
-        return weights[0,:] + weights[1,:] * A + weights[2,:] * B + weights[3,:] * A * B
+        # weights_t = F.softmax(self.w * G_SPARSITY, dim=0).transpose(0,1) if not self.binarized else self.w.transpose(0,1)
+        # weights = torch.matmul(weights_t, self.W16_to_4.transpose(0,1))  # [number_of_gates, 4]
+        # result = weights * torch.stack([torch.ones_like(A), A, B, A*B], dim=2)
+        # return result.sum(dim=2)
 
-    def forward2(self, x):
-        batch_size = x.shape[0]
-        x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
-
-        A = x[:,:,0] # [batch_size, number_of_gates]
-        B = x[:,:,1] # [batch_size, number_of_gates]
-        
-        weights_t = F.softmax(self.w * G_SPARSITY, dim=0).transpose(0,1) if not self.binarized else self.w.transpose(0,1)
-        weights = torch.matmul(weights_t, self.W16_to_4.transpose(0,1))  # [number_of_gates, 4]
-        result = weights * torch.stack([torch.ones_like(A), A, B, A*B], dim=2)
-        return result.sum(dim=2)
-
-    def forward3(self, x):
         batch_size = x.shape[0]
         x = x.view(batch_size, self.number_of_gates, 2) # [batch_size, number_of_gates, 2]
 

@@ -362,8 +362,6 @@ class Model(nn.Module):
         for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
             if   len(interconnect_params) == 1:
                 interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],                                       name=f"i_{layer_idx}")
-            elif len(interconnect_params) == 2:
-                interconnect = BlockBottleneckedInterconnect(layer_inputs, layer_gates*2, block_inputs=interconnect_params[0], block_outputs=interconnect_params[1], name=f"i_{layer_idx}")
             else:
                 interconnect = SparseInterconnect           (layer_inputs, layer_gates*2,                                                                            name=f"i_{layer_idx}")
             layers_.append(interconnect)

@@ -235,13 +235,18 @@ class BlockSparseInterconnect(nn.Module):
                                                                                                                                                                               f"sub(2): n_blocks={self.n_blocks_in_sub_layer_2}  inputs_per_block={self.inputs_per_block_in_sub_layer_2}"
         self.c_sub_layer_1 = nn.Parameter(torch.zeros((self.n_blocks_in_sub_layer_1, self.inputs_per_block_in_sub_layer_1, self.outputs_per_block_in_sub_layer_1), dtype=torch.float32))
         self.c_sub_layer_2 = nn.Parameter(torch.zeros((self.n_blocks_in_sub_layer_2, self.inputs_per_block_in_sub_layer_2, self.outputs_per_block_in_sub_layer_2), dtype=torch.float32))
-        nn.init.normal_(self.c_sub_layer_1, mean=0.0, std=1)
-        nn.init.normal_(self.c_sub_layer_2, mean=0.0, std=1)
+        if C_INIT == "UNIFORM":
+            nn.init.uniform_(self.c_sub_layer_1, a=0.0, b=1)
+            nn.init.uniform_(self.c_sub_layer_2, a=0.0, b=1)
+        else:
+            nn.init.normal_(self.c_sub_layer_1, mean=0.0, std=1)
+            nn.init.normal_(self.c_sub_layer_2, mean=0.0, std=1)
+
     
     @torch.profiler.record_function("mnist::BlockSparse::FWD")
     def forward(self, x):
-        conn_1 = F.softmax(self.c_sub_layer_1, dim=1) if not self.binarized else self.c_sub_layer_1
-        conn_2 = F.softmax(self.c_sub_layer_2, dim=1) if not self.binarized else self.c_sub_layer_2
+        conn_1 = F.softmax(self.c_sub_layer_1 * C_SPARSITY, dim=1) if not self.binarized else self.c_sub_layer_1
+        conn_2 = F.softmax(self.c_sub_layer_2 * C_SPARSITY, dim=1) if not self.binarized else self.c_sub_layer_2
 
         x_reshaped = x.view(-1, self.n_blocks_in_sub_layer_1, self.inputs_per_block_in_sub_layer_1)
         output = torch.einsum("bni,nim,mno->bmo", x_reshaped, conn_1, conn_2)

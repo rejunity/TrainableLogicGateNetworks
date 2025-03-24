@@ -427,6 +427,21 @@ class Model(nn.Module):
                 pass_fraction_array.append(pass_weight / total_weight)
         return pass_fraction_array
     
+    def get_unique_fraction(self):
+        unique_fraction_array = []
+        for model_layer in self.layers:
+            if hasattr(model_layer, 'c'):
+                c = model_layer.c.view(model_layer.c.shape[0], -1, 2)
+                A = c[:,:,0]
+                B = c[:,:,1]
+                unique_indices_a = torch.unique(torch.argmax(A, dim=0)).numel()
+                unique_indices_b = torch.unique(torch.argmax(B, dim=0)).numel()
+                #print(torch.unique(torch.argmax(model_layer.c, dim=0)).numel(), unique_indices_a, unique_indices_b, "vs", model_layer.c.shape)
+                unique_indices = (unique_indices_a + unique_indices_b) * 0.5
+                min_dimension = min(model_layer.c.shape[0], model_layer.c.shape[1] // 2)
+                unique_fraction_array.append(unique_indices / min_dimension)
+        return unique_fraction_array
+
     def compute_selected_gates_fraction(self, selected_gates):
         gate_fraction_array = []
         indices = torch.tensor(selected_gates, dtype=torch.long)
@@ -633,7 +648,8 @@ for i in range(TRAINING_STEPS):
     # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:
         passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction()])
-        log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}% - Pass {passthrough_log}")
+        unique_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_unique_fraction()])
+        log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}% - Pass {passthrough_log} | Connectivity {unique_log}")
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, 
             "tension_loss":tension_loss, })

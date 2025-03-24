@@ -84,8 +84,9 @@ PROFILER_ROWS = int(config.get("PROFILER_ROWS", 20))
 FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
+C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
-C_SPARSITY = float(config.get("C_SPARSITY", 10.0))
+C_SPARSITY = float(config.get("C_SPARSITY", 4.0))
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 
 PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "1").lower() in ("true", "1", "yes")
@@ -380,8 +381,9 @@ class Model(nn.Module):
             if PASS_INPUT_TO_ALL_LAYERS and type(self.layers[layer_idx]) is LearnableGate16Array and layer_idx < len(self.layers)-1:
                 X = torch.cat([X, I], dim=-1)
 
+        gain = self.last_layer_gates / self.input_size
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
-        X = F.softmax(X, dim=-1)
+        X = F.softmax(X / gain, dim=-1)
         return X
 
     def clone_and_binarize(self, device, bin_value=1):

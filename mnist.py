@@ -228,8 +228,8 @@ class BlockSparseInterconnect(nn.Module):
         self.name = name
         self.binarized = False
         
-        assert layer_inputs  == self.n_blocks_in_sub_layer_1 * self.inputs_per_block_in_sub_layer_1,  f"name={self.name}, sub(1): n_blocks={self.n_blocks_in_sub_layer_1} inputs_per_block={self.inputs_per_block_in_sub_layer_1}"
-        assert layer_outputs == self.n_blocks_in_sub_layer_2 * self.outputs_per_block_in_sub_layer_2, f"name={self.name}, sub(2): n_blocks={self.n_blocks_in_sub_layer_2} outputs_per_block={self.outputs_per_block_in_sub_layer_2}"
+        assert layer_inputs  == self.n_blocks_in_sub_layer_1 * self.inputs_per_block_in_sub_layer_1,  f"name={self.name}, sub(1): inputs={layer_inputs} n_blocks={self.n_blocks_in_sub_layer_1} inputs_per_block={self.inputs_per_block_in_sub_layer_1}"
+        assert layer_outputs == self.n_blocks_in_sub_layer_2 * self.outputs_per_block_in_sub_layer_2, f"name={self.name}, sub(2): outputs={layer_outputs//2} n_blocks={self.n_blocks_in_sub_layer_2} outputs_per_block={self.outputs_per_block_in_sub_layer_2//2}"
         assert self.n_blocks_in_sub_layer_1 * self.outputs_per_block_in_sub_layer_1 == self.n_blocks_in_sub_layer_2 * self.inputs_per_block_in_sub_layer_2, f"name={self.name}, sub(1): n_blocks={self.n_blocks_in_sub_layer_1} outputs_per_block={self.outputs_per_block_in_sub_layer_1}, " + \
                                                                                                                                                                               f"sub(2): n_blocks={self.n_blocks_in_sub_layer_2}  inputs_per_block={self.inputs_per_block_in_sub_layer_2}"
         self.c_sub_layer_1 = nn.Parameter(torch.zeros((self.n_blocks_in_sub_layer_1, self.inputs_per_block_in_sub_layer_1, self.outputs_per_block_in_sub_layer_1), dtype=torch.float32))

@@ -90,13 +90,15 @@ C_SPARSITY = float(config.get("C_SPARSITY", 4.0))
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 
 PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "1").lower() in ("true", "1", "yes")
+PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE",
-               "C_INIT", "G_INIT", "C_SPARSITY", "G_SPARSITY", "PASS_INPUT_TO_ALL_LAYERS",
+               "C_INIT", "G_INIT", "C_SPARSITY", "G_SPARSITY",
+               "PASS_INPUT_TO_ALL_LAYERS", "PASS_RESIDUAL",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -370,6 +372,7 @@ class Model(nn.Module):
 
         layers_ = []
         layer_inputs = input_size
+        R = [input_size]
         for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
             if   len(interconnect_params) == 1:
                 interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],                                       name=f"i_{layer_idx}")
@@ -378,17 +381,27 @@ class Model(nn.Module):
             layers_.append(interconnect)
             layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
             layer_inputs = layer_gates
+            R.append(layer_gates)
             if PASS_INPUT_TO_ALL_LAYERS:
                 layer_inputs += input_size
+            if PASS_RESIDUAL and (layer_idx > 0 or not PASS_INPUT_TO_ALL_LAYERS):
+                layer_inputs += R[-2]
         self.layers = nn.ModuleList(layers_)
 
     @torch.profiler.record_function("mnist::Model::FWD")
-    def forward(self, I):
-        X = I
+    def forward(self, X):
+        I = X
+        R = [I]
         for layer_idx in range(0, len(self.layers)):
             X = self.layers[layer_idx](X)
-            if PASS_INPUT_TO_ALL_LAYERS and type(self.layers[layer_idx]) is LearnableGate16Array and layer_idx < len(self.layers)-1:
-                X = torch.cat([X, I], dim=-1)
+            if type(self.layers[layer_idx]) is LearnableGate16Array:
+                R.append(X)
+                # TODO: fix unreadable logic with layer_idx
+                # NOTE: ugly layer_idx > 1 which differ from layer_idx > 0 in the Model constructor, but has the same meaning
+                if PASS_INPUT_TO_ALL_LAYERS and layer_idx < len(self.layers)-2:
+                    X = torch.cat([X, I], dim=-1)
+                if PASS_RESIDUAL and (layer_idx > 1 or not PASS_INPUT_TO_ALL_LAYERS) and layer_idx < len(self.layers)-2:
+                    X = torch.cat([X, R[-2]], dim=-1)
 
         gain = self.last_layer_gates / self.input_size
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)

@@ -84,7 +84,7 @@ PROFILER_ROWS = int(config.get("PROFILER_ROWS", 20))
 FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
-C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
+C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
 C_SPARSITY = float(config.get("C_SPARSITY", 4.0))
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
@@ -170,7 +170,7 @@ class SparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, name=''):
         super(SparseInterconnect, self).__init__()
         self.c = nn.Parameter(torch.zeros((inputs, outputs), dtype=torch.float32))
-        if C_INIT == "XAVIER_N":
+        if   C_INIT == "XAVIER_N":
             nn.init.xavier_normal_(self.c, gain=nn.init.calculate_gain('sigmoid'))
         elif C_INIT == "XAVIER_U":
             nn.init.xavier_uniform_(self.c, gain=nn.init.calculate_gain('sigmoid'))
@@ -182,6 +182,12 @@ class SparseInterconnect(nn.Module):
             nn.init.kaiming_normal_(self.c, mode="fan_in", nonlinearity='sigmoid')
         elif C_INIT == "KAIMING_IN_U":
             nn.init.kaiming_uniform_(self.c, mode="fan_in", nonlinearity='sigmoid')
+        elif C_INIT == "EXP_U":
+            nn.init.uniform_(self.c, a=0.0, b=1.0)
+            with torch.no_grad(): self.c.data = torch.exp(self.c)
+        elif C_INIT == "LOG_U":
+            nn.init.uniform_(self.c, a=0.0, b=1.0)
+            with torch.no_grad(): self.c.data = torch.log(self.c)
         elif C_INIT == "UNIFORM":
             nn.init.uniform_(self.c, a=0.0, b=1.0)
         else:

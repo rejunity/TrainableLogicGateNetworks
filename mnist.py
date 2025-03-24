@@ -375,9 +375,9 @@ class Model(nn.Module):
         R = [input_size]
         for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
             if   len(interconnect_params) == 1:
-                interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],                                       name=f"i_{layer_idx}")
+                interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],  name=f"i_{layer_idx}")
             else:
-                interconnect = SparseInterconnect           (layer_inputs, layer_gates*2,                                                                            name=f"i_{layer_idx}")
+                interconnect = SparseInterconnect           (layer_inputs, layer_gates*2,                                       name=f"i_{layer_idx}")
             layers_.append(interconnect)
             layers_.append(LearnableGate16Array(layer_gates, f"g_{layer_idx}"))
             layer_inputs = layer_gates

@@ -621,7 +621,7 @@ for i in range(TRAINING_STEPS):
         model_binarized = get_binarized_model(model)
         _, bin_train_acc = validate(dataset="train", model=model_binarized)
         train_acc_diff = train_acc-bin_train_acc
-        log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS} BIN TRN acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
+        log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS} BIN TRN            acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
         
         top1w = torch.tensor(0., device=device)
         top2w = torch.tensor(0., device=device)
@@ -692,7 +692,7 @@ training_total_time = time_end - time_start
 log(f"Training took {training_total_time:.2f} seconds, per iteration: {(training_total_time) / TRAINING_STEPS * 1000:.2f} milliseconds")
 
 test_loss, test_acc = validate('test')
-log(f"TEST loss={test_loss:.3f} acc={test_acc*100:.2f}%")
+log(f"    TEST loss={test_loss:.3f} acc={test_acc*100:.2f}%")
 
 
 

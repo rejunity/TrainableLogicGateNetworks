@@ -199,10 +199,7 @@ class SparseInterconnect(nn.Module):
         self.binarized = True
 
     def __repr__(self):
-        fc_params = self.layer_inputs * self.layer_outputs
-        params  = self.n_blocks * self.block_inputs * self.block_outputs
-        return f"BlockSparseInterconnect(params={(params * 100 / fc_params):.1f}%, connection_length<{self.block_inputs * 100 / self.layer_inputs}%)"
-
+        return f"SparseInterconnect({self.c.shape[0]} -> {self.c.shape[1] // 2}x2)"
 
 class BlockSparseInterconnect(nn.Module):
     def __init__(self, layer_inputs, layer_outputs, granularity, name=''):
@@ -258,7 +255,7 @@ class BlockSparseInterconnect(nn.Module):
         fc_params = self.layer_inputs * self.layer_outputs
         params  = self.n_blocks_in_sub_layer_1 * self.inputs_per_block_in_sub_layer_1 * self.outputs_per_block_in_sub_layer_1 + \
                   self.n_blocks_in_sub_layer_2 * self.inputs_per_block_in_sub_layer_2 * self.outputs_per_block_in_sub_layer_2
-        return f"BlockSparseInterconnect({(params * 100 / fc_params):.1f}%)"
+        return f"BlockSparseInterconnect({self.layer_inputs} -> {self.layer_outputs // 2}x2 @ {(params * 100 / fc_params):.1f}%)"
 
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, name=''):
@@ -340,6 +337,8 @@ class LearnableGate16Array(nn.Module):
         binarize_inplace(self.w, dim=0, bin_value=bin_value)
         self.binarized = True
 
+    def __repr__(self):
+        return f"LearnableGate16Array({self.number_of_gates})"
 
 class Model(nn.Module):
     def __init__(self, seed, gate_architecture, interconnect_architecture, number_of_categories, input_size):

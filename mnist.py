@@ -86,6 +86,7 @@ COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
 C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
+C_INIT_PARAM = float(config.get("C_INIT_PARAM", -1.0))
 C_SPARSITY = float(config.get("C_SPARSITY", 4.0))
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 
@@ -97,7 +98,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE",
-               "C_INIT", "G_INIT", "C_SPARSITY", "G_SPARSITY",
+               "C_INIT", "C_INIT_PARAM", "G_INIT", "C_SPARSITY", "G_SPARSITY",
                "PASS_INPUT_TO_ALL_LAYERS", "PASS_RESIDUAL",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
@@ -190,6 +191,34 @@ class SparseInterconnect(nn.Module):
         elif C_INIT == "LOG_U":
             nn.init.uniform_(self.c, a=0.0, b=1.0)
             with torch.no_grad(): self.c.data = torch.log(self.c)
+        # ChatGPT: Orthogonal initialization tends to spread rows out in the space, and may help ensure different dominant directions per row.
+        elif C_INIT == "ORTHO":
+            torch.nn.init.orthogonal_(self.c, gain=nn.init.calculate_gain('sigmoid'))
+        # ChatGPT: Orthogonal initialization tends to spread rows out in the space, and may help ensure different dominant directions per row.
+        elif C_INIT == "QR":
+            with torch.no_grad():
+                max_dim = max(self.c.shape[0], self.c.shape[1])
+                cc = torch.normal(mean=0.0, std=1, size=(max_dim, max_dim))
+                cc, _ = torch.linalg.qr(cc)
+                self.c.data = cc[:self.c.shape[0], :self.c.shape[1]]
+        # ChatGPT: A Dirichlet-distributed row will have a single dominant component if the concentration parameter is low.
+        elif C_INIT == "DIRICHLET":
+            with torch.no_grad():
+                alpha = (0.1 if C_INIT_PARAM < 0 else C_INIT_PARAM) * torch.ones(self.c.shape[1])
+                self.c.data = torch.distributions.Dirichlet(alpha).sample((self.c.shape[0],))
+        # ChatGPT: Start with uniform or Gaussian, apply a sharpened softmax, then back to logit-space.
+        elif C_INIT == "SOFTMAX_SHARPEN_N":
+            nn.init.normal_(self.c, mean=0.0, std=1)
+            with torch.no_grad():
+                T = 0.5 if C_INIT_PARAM < 0 else C_INIT_PARAM   # temperature
+                W = torch.nn.functional.softmax(self.c / T, dim=0)
+                self.c.data = torch.log(W)
+        elif C_INIT == "SOFTMAX_SHARPEN_U":
+            nn.init.uniform_(self.c, a=0.0, b=1.0)
+            with torch.no_grad():
+                T = 0.5 if C_INIT_PARAM < 0 else C_INIT_PARAM   # temperature
+                W = torch.nn.functional.softmax(self.c / T, dim=0)
+                self.c.data = torch.log(W)
         elif C_INIT == "UNIFORM":
             nn.init.uniform_(self.c, a=0.0, b=1.0)
         else:

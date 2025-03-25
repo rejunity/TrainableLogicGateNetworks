@@ -599,7 +599,9 @@ def l1_topk(weights_after_softmax, k=4, special_dim=0): # but goes to 1 when bin
 
 validate = get_validate(model)
 val_loss, val_accuracy = validate(dataset="val")
-log(f"INIT VAL loss={val_loss:.3f} acc={val_accuracy*100:.2f}%")
+passthrough_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_passthrough_fraction()])
+unique_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_unique_fraction()])
+log(f"INIT VAL loss={val_loss:6.3f} acc={val_accuracy*100:6.2f}%                  - Pass {passthrough_log} | Connectivity {unique_log}")
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
 
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
@@ -647,9 +649,9 @@ for i in range(TRAINING_STEPS):
 
     # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:
-        passthrough_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_passthrough_fraction()])
-        unique_log = ", ".join([f"{value * 100:.1f}%" for value in model.get_unique_fraction()])
-        log(f"Iteration {i + 1:10} - Loss {loss:.3f} - RegLoss {(1-loss_ce/loss)*100:.0f}% - Pass {passthrough_log} | Connectivity {unique_log}")
+        passthrough_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_passthrough_fraction()])
+        unique_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_unique_fraction()])
+        log(f"Iteration {i + 1:10} - Loss {loss:6.3f} - RegLoss {(1-loss_ce/loss)*100:3.0f}% - Pass {passthrough_log} | Connectivity {unique_log}")
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, 
             "tension_loss":tension_loss, })

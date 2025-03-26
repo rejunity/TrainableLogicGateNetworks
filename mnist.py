@@ -425,6 +425,12 @@ for i, (image, label) in enumerate(test_dataset):
 test_labels = torch.nn.functional.one_hot(test_labels_, num_classes=NUMBER_OF_CATEGORIES)
 test_labels = test_labels.type(torch.float32)
 
+
+### INSTANTIATE THE MODEL AND MOVE TO GPU ###
+random.seed(SEED)
+torch.manual_seed(SEED)
+model = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
+
 ### VALIDATE ###
 
 def get_validate(default_model):
@@ -490,30 +496,8 @@ def l1_topk(weights_after_softmax, k=4, special_dim=0): # but goes to 1 when bin
     non_top_k_sum = (1 - top_k_sum).sum()
     return 1. - non_top_k_sum / normalization_factor
 
-def passthrough_regularization(weights_after_softmax):
-    indices = torch.tensor([3, 5, 10, 12], dtype=torch.long)
-    pass_weight = (weights_after_softmax[indices, :]).sum()
-    total_weight = weights_after_softmax.sum()
-    return pass_weight / total_weight
+### TRAIN ###
 
-def const_regularization(weights_after_softmax):
-    indices = torch.tensor([0, 15], dtype=torch.long)
-    const_weight = (weights_after_softmax[indices, :]).sum()
-    total_weight = weights_after_softmax.sum()
-    return const_weight / total_weight
-
-def pid_controller(value, target=1, prev_error=0, prev_integral=0, kp=PID_P, ki=PID_I, kd=PID_D):
-    error = target - value
-    integral = prev_integral + error
-    derivative = (error - prev_error)
-    control = kp * error + ki * integral + kd * derivative
-    log(f"ki*integral={ki*integral:.4f}")
-    log(f"kd*derivative={kd*derivative:.4f}")
-    return control, error, integral
-
-    ### TRAIN ###
-
-validate = get_validate(model)
 val_loss, val_accuracy = validate(dataset="val")
 log(f"INIT VAL loss={val_loss:.3f} acc={val_accuracy*100:.2f}%")
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})

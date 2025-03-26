@@ -204,8 +204,6 @@ class Model(nn.Module):
         self.number_of_categories = number_of_categories
         self.input_size = input_size
         self.seed = seed
-        random.seed(self.seed)
-        torch.manual_seed(self.seed)
         
         self.outputs_per_category = self.last_layer_gates // self.number_of_categories
         assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
@@ -348,7 +346,8 @@ test_labels = test_labels.type(torch.float32)
 
 
 ### INSTANTIATE THE MODEL AND MOVE TO GPU ###
-
+random.seed(SEED)
+torch.manual_seed(SEED)
 model = Model(seed=SEED, net_architecture=NET_ARCHITECTURE, number_of_categories=NUMBER_OF_CATEGORIES, input_size=INPUT_SIZE).to(device)
 
 ### VALIDATE ###

@@ -55,20 +55,20 @@ ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true
 
 SEED = config.get("SEED", random.randint(0, 1024*1024))
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[2000, 2000]")) # previous: "[1300,1300,1300]"))
+GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[2250, 2250, 2250]")) # previous: "[1300,1300,1300]")) resnet95: [2000, 2000]
 INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[]")) # previous: "[[32, 325], [26, 52], [26, 52]]"))
 if not INTERCONNECT_ARCHITECTURE or INTERCONNECT_ARCHITECTURE == []:
     INTERCONNECT_ARCHITECTURE = [[] for g in GATE_ARCHITECTURE]
 assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
-EPOCHS = int(config.get("EPOCHS", 300)) # previous: 50
+EPOCHS = int(config.get("EPOCHS", 200)) # previous: 50
 EPOCH_STEPS = round(54_000 / BATCH_SIZE) # 54K train /6K val/10K test
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
-PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS // 4))
+PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS * 5)) # previous EPOCH_STEPS // 4, changed to reduce the frequency of connectivy_gain updates
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
 
-LEARNING_RATE = float(config.get("LEARNING_RATE", 0.01))
+LEARNING_RATE = float(config.get("LEARNING_RATE", 0.03)) # previous: 0.01
 
 TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
@@ -87,13 +87,13 @@ COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
 C_INIT_PARAM = float(config.get("C_INIT_PARAM", -1.0))
-C_SPARSITY = float(config.get("C_SPARSITY", 4.0))
+C_SPARSITY = float(config.get("C_SPARSITY", 5.0)) # previous: 5
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 
-PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "1").lower() in ("true", "1", "yes")
+PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "0").lower() in ("true", "1", "yes") # previous: 1
 PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 
-CONNECTIVITY_GAIN = config.get("CONNECTIVITY_GAIN", "0").lower() in ("true", "1", "yes")
+CONNECTIVITY_GAIN = config.get("CONNECTIVITY_GAIN", "1").lower() in ("true", "1", "yes")
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",

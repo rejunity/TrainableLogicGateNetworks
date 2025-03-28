@@ -93,6 +93,8 @@ G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "1").lower() in ("true", "1", "yes")
 PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 
+CONNECTIVITY_GAIN = config.get("CONNECTIVITY_GAIN", "0").lower() in ("true", "1", "yes")
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
@@ -100,6 +102,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "LEARNING_RATE",
                "C_INIT", "C_INIT_PARAM", "G_INIT", "C_SPARSITY", "G_SPARSITY",
                "PASS_INPUT_TO_ALL_LAYERS", "PASS_RESIDUAL",
+               "CONNECTIVITY_GAIN",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -395,6 +398,7 @@ class Model(nn.Module):
         self.seed = seed
         random.seed(self.seed)
         torch.manual_seed(self.seed)
+        self.connectivity_gain = 0.65 ** len(gate_architecture)
         
         self.outputs_per_category = self.last_layer_gates // self.number_of_categories
         assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
@@ -433,6 +437,8 @@ class Model(nn.Module):
                     X = torch.cat([X, R[-2]], dim=-1)
 
         gain = self.last_layer_gates / self.input_size
+        if CONNECTIVITY_GAIN:
+            gain *= self.connectivity_gain
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         X = F.softmax(X / gain, dim=-1)
         return X
@@ -469,6 +475,7 @@ class Model(nn.Module):
                 unique_indices = (unique_indices_a + unique_indices_b) * 0.5
                 min_dimension = min(model_layer.c.shape[0], model_layer.c.shape[1] // 2)
                 unique_fraction_array.append(unique_indices / min_dimension)
+        self.connectivity_gain = np.prod(unique_fraction_array)
         return unique_fraction_array
 
     def compute_selected_gates_fraction(self, selected_gates):

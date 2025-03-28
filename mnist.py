@@ -396,8 +396,6 @@ class Model(nn.Module):
         self.number_of_categories = number_of_categories
         self.input_size = input_size
         self.seed = seed
-        random.seed(self.seed)
-        torch.manual_seed(self.seed)
         self.connectivity_gain = 0.65 ** len(gate_architecture)
         
         self.outputs_per_category = self.last_layer_gates // self.number_of_categories
@@ -493,6 +491,8 @@ class Model(nn.Module):
 ### INSTANTIATE THE MODEL AND MOVE TO GPU ###
 
 log(f"PREPARE MODEL on device={device}")
+random.seed(SEED)
+torch.manual_seed(SEED)
 model = Model(SEED, GATE_ARCHITECTURE, INTERCONNECT_ARCHITECTURE, NUMBER_OF_CATEGORIES, INPUT_SIZE).to(device)
 if COMPILE_MODEL:
     torch.set_float32_matmul_precision('high')

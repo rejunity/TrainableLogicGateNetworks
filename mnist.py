@@ -172,6 +172,56 @@ def binarize_inplace(x, dim=-1, bin_value=1):
     x.data.scatter_(dim=dim, index=ones_at.unsqueeze(dim), value=bin_value)
 
 ############################ MODEL ########################
+class FixedPowerLawInterconnect(nn.Module):
+    def __init__(self, inputs, outputs, alpha, x_min=1.0, name=''):
+        super(FixedPowerLawInterconnect, self).__init__()
+        self.inputs = inputs
+        self.outputs = outputs
+        self.alpha = alpha
+
+        max_length = inputs
+        size = outputs
+        r = torch.rand(size)
+        if alpha > 1:
+            magnitudes = x_min * (1 - r) ** (-1 / (alpha - 1))          # Power law distribution
+            signs = torch.randint(low=0, high=2, size=(size,)) * 2 - 1  # -1 or +1
+            offsets = magnitudes * signs * max_length
+        else:
+            offsets = r * max_length
+        indices = torch.arange(start=0, end=size) + offsets.long()
+        indices = indices % max_length
+        self.register_buffer("indices", indices)
+
+        self.binarized = False
+
+        # self.batch_indices = indices.unsqueeze(0)
+
+    @torch.profiler.record_function("mnist::Fixed::FWD")
+    def forward(self, x):
+        return x[:, self.indices] if not self.binarized else torch.matmul(x, self.c)
+
+        # Performance comparison
+        # 1) x[:, self.indices]
+        # MPS: 4.29 ms per iteration [300,300], tiny bit faster
+        # MPS: 9.93 ms per iteration [3000,3000]
+        # Takes significantly less memory though!
+
+        # 2)
+        # batch_size = x.shape[0]
+        # if self.batch_indices.shape[0] != batch_size:
+        #     self.batch_indices = self.indices.repeat(batch_size, 1)
+        # return torch.gather(x, dim=1, index=self.batch_indices) 
+        # MPS: 4.57 ms per iteration [300,300]
+        # MPS: 9.32 ms per iteration [3000,3000], tiny bit faster
+
+    def binarize(self, bin_value=1):
+        self.c = torch.zeros((self.inputs, self.outputs), dtype=torch.float32, device=device)
+        self.c.scatter_(dim=0, index=self.indices.unsqueeze(0), value=bin_value)
+        self.binarized = True
+
+    def __repr__(self):
+        return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha})"
+
 class SparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, name=''):
         super(SparseInterconnect, self).__init__()
@@ -405,8 +455,10 @@ class Model(nn.Module):
         layer_inputs = input_size
         R = [input_size]
         for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
-            if   len(interconnect_params) == 1:
+            if   len(interconnect_params) == 1 and interconnect_params[0] > 0:
                 interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],  name=f"i_{layer_idx}")
+            elif len(interconnect_params) == 1 and interconnect_params[0] < 0:
+                interconnect = FixedPowerLawInterconnect    (layer_inputs, layer_gates*2, alpha=      -interconnect_params[0],  name=f"i_{layer_idx}")
             else:
                 interconnect = SparseInterconnect           (layer_inputs, layer_gates*2,                                       name=f"i_{layer_idx}")
             layers_.append(interconnect)

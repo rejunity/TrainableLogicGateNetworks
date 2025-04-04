@@ -221,7 +221,15 @@ class FixedPowerLawInterconnect(nn.Module):
             self.binarized = True
 
     def __repr__(self):
-        return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha})"
+        with torch.no_grad():
+            i = self.indices.view(self.outputs // 2, 2) # [batch_size, number_of_gates, 2]
+            A = i[:,0]
+            B = i[:,1]
+
+            d = torch.abs(A-B)
+            d = torch.minimum(d, self.inputs - d)
+            # d[d >= self.inputs] = self.inputs - d
+            return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha}, mean={d.float().mean().long()} median={d.float().median().long()})"
 
 class SparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, name=''):

@@ -215,9 +215,10 @@ class FixedPowerLawInterconnect(nn.Module):
         # MPS: 9.32 ms per iteration [3000,3000], tiny bit faster
 
     def binarize(self, bin_value=1):
-        self.c = torch.zeros((self.inputs, self.outputs), dtype=torch.float32, device=device)
-        self.c.scatter_(dim=0, index=self.indices.unsqueeze(0), value=bin_value)
-        self.binarized = True
+        with torch.no_grad():
+            self.c = torch.zeros((self.inputs, self.outputs), dtype=torch.float32, device=device)
+            self.c.scatter_(dim=0, index=self.indices.unsqueeze(0), value=bin_value)
+            self.binarized = True
 
     def __repr__(self):
         return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha})"

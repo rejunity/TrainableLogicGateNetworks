@@ -107,6 +107,8 @@ TAU_LR = float(config.get("TAU_LR", 0.03))
 if TAU_LR == 0 and SCALE_LOGITS.startswith("ADATAU"):
     SCALE_LOGITS = "0"
 
+DROPOUT = float(config.get("DROPOUT", 0.0))
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
@@ -117,6 +119,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "NO_SOFTMAX",
                "MANUAL_GAIN",
                "SCALE_LOGITS", "SCALE_TARGET", "TAU_LR",
+               "DROPOUT",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -186,6 +189,26 @@ def binarize_inplace(x, dim=-1, bin_value=1):
     x.data.scatter_(dim=dim, index=ones_at.unsqueeze(dim), value=bin_value)
 
 ############################ MODEL ########################
+class Dropout01(nn.Module):
+    def __init__(self, p: float = 0.5):
+        super(Dropout01, self).__init__()
+        if not 0 <= p < 1:
+            raise ValueError("Dropout probability must be in the range [0, 1).")
+        self.p = p
+
+    def forward(self, x):
+        if not self.training or self.p == 0:
+            return x
+
+        mask = (torch.rand_like(x) > self.p).float()
+        zero_one = (torch.rand_like(x) < 0.5).float()
+
+        # return mask * x + (1 - mask) * zero_one
+        return torch.where(torch.rand_like(x) > self.p, x, zero_one)
+
+    def __repr__(self):
+        return f"Dropout01(p={self.p})"
+
 class FixedPowerLawInterconnect(nn.Module):
     def __init__(self, inputs, outputs, alpha, x_min=1.0, name=''):
         super(FixedPowerLawInterconnect, self).__init__()
@@ -561,6 +584,9 @@ class Model(nn.Module):
                 layer_inputs += R[-2]
         self.layers = nn.ModuleList(layers_)
 
+        if DROPOUT > 0:
+            self.dropout = Dropout01(p=DROPOUT)
+
     @torch.profiler.record_function("mnist::Model::FWD")
     def forward(self, X):
         with torch.no_grad():
@@ -580,6 +606,8 @@ class Model(nn.Module):
                     X = torch.cat([X, I], dim=-1)
                 if PASS_RESIDUAL and (layer_idx > 1 or not PASS_INPUT_TO_ALL_LAYERS) and layer_idx < len(self.layers)-2:
                     X = torch.cat([X, R[-2]], dim=-1)
+                if hasattr(self, 'dropout'):
+                    X = self.dropout(X)
 
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         if not self.training:   # INFERENCE ends here! Everything past this line will only concern training

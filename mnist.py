@@ -85,7 +85,7 @@ FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
 C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
-G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
+G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM, PASSTHROUGH, XOR
 C_INIT_PARAM = float(config.get("C_INIT_PARAM", -1.0))
 C_SPARSITY = float(config.get("C_SPARSITY", 3.0)) # previous: 5
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
@@ -372,6 +372,10 @@ class LearnableGate16Array(nn.Module):
         nn.init.normal_(self.w, mean=0, std=1)
         if G_INIT == "UNIFORM":
             nn.init.uniform_(self.w, a=0.0, b=1.0)
+        elif G_INIT == "PASS" or G_INIT == "PASSTHROUGH":
+            with torch.no_grad(): self.w[3, :] = 5 # 5 will roughly result in a 95% percent once softmax() applied
+        elif G_INIT == "XOR":
+            with torch.no_grad(): self.w[6, :] = 5 # 5 will roughly result in a 95% percent once softmax() applied
         else:
             nn.init.normal_(self.w, mean=0.0, std=1)
 

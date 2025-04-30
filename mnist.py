@@ -533,6 +533,10 @@ class Model(nn.Module):
                 unique_indices = (unique_indices_a + unique_indices_b) * 0.5
                 min_dimension = min(model_layer.c.shape[0], model_layer.c.shape[1] // 2)
                 unique_fraction_array.append(unique_indices / min_dimension)
+            elif hasattr(model_layer, 'indices'):
+                max_inputs = model_layer.indices.max().item() # approximation
+                unique_indices = torch.unique(model_layer.indices).numel()
+                unique_fraction_array.append(unique_indices / max_inputs)
         return unique_fraction_array
 
     def compute_selected_gates_fraction(self, selected_gates):

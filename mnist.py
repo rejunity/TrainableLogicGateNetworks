@@ -94,6 +94,7 @@ PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "0").lower() i
 PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 
 CONNECTIVITY_GAIN = config.get("CONNECTIVITY_GAIN", "1").lower() in ("true", "1", "yes")
+DROPOUT = float(config.get("DROPOUT", 1.0))
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
@@ -103,6 +104,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "C_INIT", "C_INIT_PARAM", "G_INIT", "C_SPARSITY", "G_SPARSITY",
                "PASS_INPUT_TO_ALL_LAYERS", "PASS_RESIDUAL",
                "CONNECTIVITY_GAIN",
+               "DROPOUT",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -172,6 +174,27 @@ def binarize_inplace(x, dim=-1, bin_value=1):
     x.data.scatter_(dim=dim, index=ones_at.unsqueeze(dim), value=bin_value)
 
 ############################ MODEL ########################
+class Dropout01(nn.Module):
+    def __init__(self, p: float = 0.5):
+        super(Dropout01, self).__init__()
+        if not 0 <= p < 1:
+            raise ValueError("Dropout probability must be in the range [0, 1).")
+        self.p = p
+
+    def forward(self, x):
+        if not self.training or self.p == 0:
+            return x
+
+        mask = (torch.rand_like(x) > self.p).float()
+        zero_one = (torch.rand_like(x) < 0.5).float()
+
+        # return mask * x + (1 - mask) * zero_one
+        # return torch.where(torch.rand_like(x) > self.p, x, zero_one)
+        return torch.where(torch.rand_like(x) > self.p, x, 1)
+
+    def __repr__(self):
+        return f"Dropout01(p={self.p})"
+
 class FixedPowerLawInterconnect(nn.Module):
     def __init__(self, inputs, outputs, alpha, x_min=1.0, name=''):
         super(FixedPowerLawInterconnect, self).__init__()
@@ -480,6 +503,8 @@ class Model(nn.Module):
                 layer_inputs += R[-2]
         self.layers = nn.ModuleList(layers_)
 
+        if DROPOUT > 0:
+            self.dropout = Dropout01(p=DROPOUT)
     @torch.profiler.record_function("mnist::Model::FWD")
     def forward(self, X):
         I = X
@@ -500,6 +525,9 @@ class Model(nn.Module):
             gain *= self.connectivity_gain
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         X = F.softmax(X / gain, dim=-1)
+
+        if DROPOUT > 0:
+            X = self.dropout(X)
         return X
 
     def clone_and_binarize(self, device, bin_value=1):

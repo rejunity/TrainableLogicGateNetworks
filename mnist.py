@@ -214,8 +214,9 @@ class FixedPowerLawInterconnect(nn.Module):
 
     def binarize(self, bin_value=1):
         with torch.no_grad():
-            self.c = torch.zeros((self.inputs, self.outputs), dtype=torch.float32, device=device)
-            self.c.scatter_(dim=0, index=self.indices.unsqueeze(0), value=bin_value)
+            c = torch.zeros((self.inputs, self.outputs), dtype=torch.float32, device=device)
+            c.scatter_(dim=0, index=self.indices.unsqueeze(0), value=bin_value)
+            self.register_buffer("c", c)
             self.binarized = True
 
     def __repr__(self):

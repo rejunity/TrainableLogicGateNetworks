@@ -228,7 +228,6 @@ class FixedPowerLawInterconnect(nn.Module):
 
             d = torch.abs(A-B)
             d = torch.minimum(d, self.inputs - d)
-            # d[d >= self.inputs] = self.inputs - d
             return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha}, mean={d.float().mean().long()} median={d.float().median().long()})"
 
 class SparseInterconnect(nn.Module):

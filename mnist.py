@@ -602,44 +602,52 @@ if ONLY_USE_DATA_SUBSET:
 ### MOVE TRAIN DATASET TO GPU ###
 
 train_dataset_samples = len(train_dataset)
-train_images = torch.empty((train_dataset_samples, INPUT_SIZE), dtype=torch.float32, device=device)
-train_labels = torch.empty((train_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32, device=device)
+train_images = torch.empty((train_dataset_samples, INPUT_SIZE), dtype=torch.float32)
+train_labels = torch.empty((train_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32)
 
-train_labels_ = torch.empty((train_dataset_samples), dtype=torch.long, device=device)
+train_labels_ = torch.empty((train_dataset_samples), dtype=torch.long)
 for i, (image, label) in enumerate(train_dataset):
     train_images[i] = image
     train_labels_[i] = label
 train_labels = torch.nn.functional.one_hot(train_labels_, num_classes=NUMBER_OF_CATEGORIES)
 train_labels = train_labels.type(torch.float32)
 
+train_images = train_images.to(device)
+train_labels = train_labels.to(device)
+
 ### MOVE VAL DATASET TO GPU ###
 
 val_dataset_samples = len(val_dataset)
 
-val_images = torch.empty((val_dataset_samples, INPUT_SIZE), dtype=torch.float32, device=device)
-val_labels = torch.empty((val_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32, device=device)
+val_images = torch.empty((val_dataset_samples, INPUT_SIZE), dtype=torch.float32)
+val_labels = torch.empty((val_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32)
 
-val_labels_ = torch.empty((val_dataset_samples), dtype=torch.long, device=device)
+val_labels_ = torch.empty((val_dataset_samples), dtype=torch.long)
 for i, (image, label) in enumerate(val_dataset):
     val_images[i] = image
     val_labels_[i] = label
 val_labels = torch.nn.functional.one_hot(val_labels_, num_classes=NUMBER_OF_CATEGORIES)
 val_labels = val_labels.type(torch.float32)
 
+val_images = val_images.to(device)
+val_labels = val_labels.to(device)
 
 ### MOVE TEST DATASET TO GPU ###
 
 test_dataset_samples = len(test_dataset)
 
-test_images = torch.empty((test_dataset_samples, INPUT_SIZE), dtype=torch.float32, device=device)
-test_labels = torch.empty((test_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32, device=device)
+test_images = torch.empty((test_dataset_samples, INPUT_SIZE), dtype=torch.float32)
+test_labels = torch.empty((test_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32)
 
-test_labels_ = torch.empty((test_dataset_samples), dtype=torch.long, device=device)
+test_labels_ = torch.empty((test_dataset_samples), dtype=torch.long)
 for i, (image, label) in enumerate(test_dataset):
     test_images[i] = image
     test_labels_[i] = label
 test_labels = torch.nn.functional.one_hot(test_labels_, num_classes=NUMBER_OF_CATEGORIES)
 test_labels = test_labels.type(torch.float32)
+
+test_images = test_images.to(device)
+test_labels = test_labels.to(device)
 
 ### VALIDATE ###
 

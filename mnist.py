@@ -563,34 +563,92 @@ log(f"model={model}")
 ############################ DATA ########################
 
 ### GENERATORS
-def binarize_image_with_histogram(image, verbose=False):
-    threshold = torch.quantile(image, BINARIZE_IMAGE_TRESHOLD)
-    return (image > threshold).float()
+def transform():    
+    def binarize_image_with_histogram(image):
+        threshold = torch.quantile(image, BINARIZE_IMAGE_TRESHOLD)
+        return (image > threshold).float()
 
-transform = transforms.Compose([
-    transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
-    transforms.ToTensor(),
-    transforms.Lambda(lambda x: x.view(-1)),
-    transforms.Lambda(lambda x: binarize_image_with_histogram(x))
-])
+    return transforms.Compose([
+        transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
+        transforms.ToTensor(),
+        transforms.Lambda(lambda x: x.view(-1)),
+        transforms.Lambda(lambda x: binarize_image_with_histogram(x))
+    ])
 
-train_dataset = torchvision.datasets.MNIST(
+import inspect
+import hashlib
+import re
+    
+def get_code_hash(fn, verbose=False) -> str:
+    def replace_globals_in_string(s: str) -> str:
+        for name, value in globals().items():
+            if inspect.isfunction(value) or inspect.isclass(value) or inspect.ismodule(value):
+                continue
+            try:
+                pattern = re.escape(name)
+                replacement = str(value)
+                s = re.sub(rf'\b{pattern}\b', replacement, s)
+            except Exception:
+                continue
+        return s
+    src = inspect.getsource(fn)
+    src = replace_globals_in_string(src)
+    if verbose:
+        print(src)
+    return hashlib.sha1(src.encode('utf-8')).hexdigest()[:10]
+
+hash_transform_fn = get_code_hash(transform)#, verbose=True)
+log(f"READ DATA")
+
+def load_or_build_cached_mnist(root, train, transform, hash):
+    split = 'train' if train else 'test'
+    path = f'{root}/cached_mnist_{split}_{hash}.pt' #  get_cache_path(config, split)
+    try:
+        cached = torch.load(path)
+        print(f"Loaded cached MNIST {split} from {path}")
+        return torch.utils.data.TensorDataset(cached['data'], cached['labels'])
+    except FileNotFoundError:
+        print(f"No cache found for hash {hash}. Building new cache at {path}...")
+        # dataset = CIFAR10(root='./data', train=(split == 'train'), download=True, transform=transform)
+        dataset = torchvision.datasets.MNIST(
+            root=root,
+            train=train,
+            transform=transform,
+            download=True
+        )
+
+        inputs, labels = [], []
+        # for x, y in tqdm(dataset, desc=f"Preprocessing MNIST {split}"):
+        for x, y in dataset:
+            inputs.append(x.unsqueeze(0))
+            labels.append(torch.tensor(y).unsqueeze(0))
+
+        data_tensor = torch.cat(inputs, dim=0)
+        label_tensor = torch.cat(labels, dim=0)
+        torch.save({'data': data_tensor, 'labels': label_tensor, 'hash': hash}, path)
+        return torch.utils.data.TensorDataset(data_tensor, label_tensor)
+
+# train_dataset = torchvision.datasets.MNIST(
+train_dataset = load_or_build_cached_mnist(
     root="./data",
     train=True,
-    transform=transform,
-    download=True
+    transform=transform(),
+    hash=hash_transform_fn
+    # download=True
 )
 
-test_dataset = torchvision.datasets.MNIST(
+# test_dataset = torchvision.datasets.MNIST(
+test_dataset = load_or_build_cached_mnist(
     root="./data",
     train=False,
-    transform=transform,
-    download=True
+    transform=transform(),
+    hash=hash_transform_fn
+    # download=True
 )
 
 ### SPLIT TRAIN DATASET ###
 
-log(f"LOAD DATA")
+log(f"UPLOAD DATA")
 train_size = int(TRAIN_FRACTION * len(train_dataset))
 val_size = len(train_dataset) - train_size
 train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(DATA_SPLIT_SEED))

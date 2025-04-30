@@ -94,6 +94,8 @@ PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "0").lower() i
 PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 
 
+NO_SOFTMAX = config.get("NO_SOFTMAX", "1").lower() in ("true", "1", "yes") # previous: 0
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
@@ -101,6 +103,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "LEARNING_RATE",
                "C_INIT", "C_INIT_PARAM", "G_INIT", "C_SPARSITY", "G_SPARSITY",
                "PASS_INPUT_TO_ALL_LAYERS", "PASS_RESIDUAL",
+               "NO_SOFTMAX",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -503,7 +506,9 @@ class Model(nn.Module):
                                 # 1) an OPTIMISATION and
                                 # 2) it ensures no discrepancy between VALIDATION step during training vs STANDALONE inference
 
-        X = F.softmax(X / gain, dim=-1)
+        X = X / gain
+        if not NO_SOFTMAX:
+            X = F.softmax(X, dim=-1)
         return X
 
     def clone_and_binarize(self, device, bin_value=1):

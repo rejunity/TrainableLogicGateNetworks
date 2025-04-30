@@ -523,6 +523,8 @@ class Model(nn.Module):
     def get_unique_fraction(self):
         unique_fraction_array = []
         for model_layer in self.layers:
+            # TODO: better to measure only unique indices that point to the previous layer and ignore skip connections:
+            # ... = sum(unique_indices < previous_layer.c.shape[1])
             if hasattr(model_layer, 'c'):
                 c = model_layer.c.view(model_layer.c.shape[0], -1, 2)
                 A = c[:,:,0]

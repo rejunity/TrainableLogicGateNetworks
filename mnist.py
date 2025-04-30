@@ -498,6 +498,11 @@ class Model(nn.Module):
 
         gain = self.last_layer_gates / self.input_size
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
+        if not self.training:   # INFERENCE ends here! Everything past this line will only concern training
+            return X            # Finishing inference here is both:
+                                # 1) an OPTIMISATION and
+                                # 2) it ensures no discrepancy between VALIDATION step during training vs STANDALONE inference
+
         X = F.softmax(X / gain, dim=-1)
         return X
 

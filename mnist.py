@@ -93,6 +93,7 @@ G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "0").lower() in ("true", "1", "yes") # previous: 1
 PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 
+MANUAL_GAIN = float(config.get("MANUAL_GAIN", 1.0))
 
 NO_SOFTMAX = config.get("NO_SOFTMAX", "1").lower() in ("true", "1", "yes") # previous: 0
 
@@ -104,6 +105,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "C_INIT", "C_INIT_PARAM", "G_INIT", "C_SPARSITY", "G_SPARSITY",
                "PASS_INPUT_TO_ALL_LAYERS", "PASS_RESIDUAL",
                "NO_SOFTMAX",
+               "MANUAL_GAIN",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -499,13 +501,13 @@ class Model(nn.Module):
                 if PASS_RESIDUAL and (layer_idx > 1 or not PASS_INPUT_TO_ALL_LAYERS) and layer_idx < len(self.layers)-2:
                     X = torch.cat([X, R[-2]], dim=-1)
 
-        gain = self.last_layer_gates / self.input_size
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         if not self.training:   # INFERENCE ends here! Everything past this line will only concern training
             return X            # Finishing inference here is both:
                                 # 1) an OPTIMISATION and
                                 # 2) it ensures no discrepancy between VALIDATION step during training vs STANDALONE inference
 
+        gain = MANUAL_GAIN
         X = X / gain
         if not NO_SOFTMAX:
             X = F.softmax(X, dim=-1)

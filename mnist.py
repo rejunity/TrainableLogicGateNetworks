@@ -96,6 +96,13 @@ PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 MANUAL_GAIN = float(config.get("MANUAL_GAIN", 1.0))
 
 NO_SOFTMAX = config.get("NO_SOFTMAX", "1").lower() in ("true", "1", "yes") # previous: 0
+SCALE_LOGITS = config.get("SCALE_LOGITS", "0") # TANH, ARCSINH, BN, MINMAX, ADATAU
+SCALE_TARGET = float(config.get("SCALE_TARGET", 1.0))
+if SCALE_TARGET == 0:
+    SCALE_LOGITS = "0"
+TAU_LR = float(config.get("TAU_LR", 0.001))
+if TAU_LR == 0 and SCALE_LOGITS.startswith("ADATAU"):
+    SCALE_LOGITS = "0"
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
@@ -106,6 +113,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "PASS_INPUT_TO_ALL_LAYERS", "PASS_RESIDUAL",
                "NO_SOFTMAX",
                "MANUAL_GAIN",
+               "SCALE_LOGITS", "SCALE_TARGET", "TAU_LR",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -462,6 +470,7 @@ class Model(nn.Module):
         self.number_of_categories = number_of_categories
         self.input_size = input_size
         self.seed = seed
+        self.adatau = 0
         
         self.outputs_per_category = self.last_layer_gates // self.number_of_categories
         assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
@@ -509,6 +518,126 @@ class Model(nn.Module):
 
         gain = MANUAL_GAIN
         X = X / gain
+
+        if SCALE_LOGITS == "TANH":
+            mu = torch.mean(X, dim=0)
+            X = SCALE_TARGET * torch.tanh((X - mu)/SCALE_TARGET)
+        elif SCALE_LOGITS == "ARCSINH":
+            mu = torch.mean(X, dim=0)
+            k = 2
+            X = SCALE_TARGET * torch.arcsinh((X - mu)/SCALE_TARGET*k) / np.arcsinh(k)
+        elif SCALE_LOGITS == "MINMAX":
+            rng = torch.max(X).item() - torch.min(X).item()
+            f = self.outputs_per_category / rng
+            X = X / f / SCALE_TARGET
+            self.fwd_applied_gain = f * SCALE_TARGET
+        elif SCALE_LOGITS == "ADATAU": # TAU_LR=0.001 SCALE_TARGET 0.75 -> 96.6 LLLLx1000
+            rng = torch.max(X).item() - torch.min(X).item()
+            t = rng / self.outputs_per_category
+            if self.adatau < 0.1:
+                self.adatau = 1 / t
+            elif t < SCALE_TARGET:
+                self.adatau *= 1.0+TAU_LR
+            else:
+                self.adatau *= 1.0-TAU_LR*100 # faster falloff
+            self.adatau = min(self.adatau, 100)
+            X = X / self.adatau
+            self.fwd_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADATAU2":
+            rng = torch.max(X).item() - torch.min(X).item()
+            t = rng / self.outputs_per_category
+            if self.adatau < 0.1:
+                self.adatau = 1 / t
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + (1 / t) * TAU_LR
+            self.adatau = min(self.adatau, 100)
+            X = X / self.adatau
+            self.fwd_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADATAU4": # SCALE_TARGET=.7 TAU_LR=.001
+            rng = torch.max(X).item() - torch.min(X).item()
+            t = rng / self.outputs_per_category
+            self.adatau += (SCALE_TARGET-t)*TAU_LR
+            self.adatau = max(self.adatau, .1)
+            self.adatau = min(self.adatau, 100)
+            X = X / self.adatau
+            self.fwd_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADAVAR0":
+            # std = torch.std(X, dim=0)
+            std = torch.std(X).item()
+            t = std / (4.0 * SCALE_TARGET)
+            if self.adatau < 0.1:
+                self.adatau = t
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
+            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            X = X / self.adatau
+            self.fwd_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADAVAR":      # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.96/97.57% Lx8000 (20epochs)
+                                            # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.99/97.73% LFFx8000 (30epochs)
+                                            # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.86/96.79% LFFFFFx8000 (30epochs)
+                                            # SCALE_TARGET=1   TAU_LR=.03 C_SPARSITY=1 ->   99.91/97.47% LFFFFFx8000 (30epochs)
+                                            # SCALE_TARGET=1   TAU_LR=.01              ->   97.62/96.32% LLLLx1000 (50 epochs)
+            std = torch.std(X).item()
+            t = std / (4.0 * SCALE_TARGET)
+            if self.adatau < 0.1:
+                self.adatau = np.sqrt(self.outputs_per_category)
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
+            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            X = X / self.adatau
+            self.fwd_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADAVAR_TANH": # SCALE_TARGET=1 TAU_LR=.01               ->    98.71/97.44% Lx8000 (20epochs)
+            std = torch.std(X).item()
+            t = std / (4.0 * SCALE_TARGET)
+            if self.adatau < 0.1:
+                self.adatau = np.sqrt(self.outputs_per_category)
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
+            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            X = X / self.adatau
+            self.fwd_applied_gain = self.adatau
+            mu = torch.mean(X, dim=0)
+            std = torch.std(X).item()
+            X = (3.0 * std) * torch.tanh((X - mu)/(3.0 * std))
+        elif SCALE_LOGITS == "ADAVAR_ARCSINH" or \
+             SCALE_LOGITS == "ADAVAR_ASH":  # SCALE_TARGET=1 TAU_LR=.01 ->                  99.53/97.58% Lx8000 (20epochs)
+                                            #                                               98.09/96.28% LLLLx1000 (50 epochs)
+                                            #                                               98.72/96.56% LLLx1000+Lx8000 (20 epochs)
+            std = torch.std(X).item()
+            t = std / (4.0 * SCALE_TARGET)
+            if self.adatau < 0.1:
+                self.adatau = np.sqrt(self.outputs_per_category)
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
+            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            X = X / self.adatau
+            self.fwd_applied_gain = self.adatau
+            k = 2
+            mu = torch.mean(X, dim=0)
+            std = torch.std(X).item()
+            X = (2.0 * std) * torch.arcsinh((X - mu)/(2.0 * std)*k) / np.arcsinh(k)
+        elif SCALE_LOGITS == "AUTOTAU":
+            tau = np.sqrt(self.outputs_per_category / (4.0 * SCALE_TARGET))
+            X = X / tau
+            self.fwd_applied_gain = tau
+        elif SCALE_LOGITS == "AUTOTAU_TANH":
+            tau = np.sqrt(self.outputs_per_category / (6.0 * SCALE_TARGET))
+            X = X / tau
+            self.fwd_applied_gain = tau
+            mu = torch.mean(X, dim=0)
+            X = tau * torch.tanh((X - mu)/tau)
+        elif SCALE_LOGITS == "AUTOTAU_ARCSINH" or \
+             SCALE_LOGITS == "AUTOTAU_ASH":         # SCALE_TARGET=1 TAU_LR=.01 ->          ??.??/(?)97.55% Lx8000 (20epochs)
+                                                    #                                       ??.??/(?)95.93% LLLLx1000 (50 epochs)
+            tau = np.sqrt(self.outputs_per_category / (6.0 * SCALE_TARGET))
+            X = X / tau
+            self.fwd_applied_gain = tau
+            k = 2
+            mu = torch.mean(X, dim=0)
+            std = torch.std(X).item()
+            X = (2.0 * std) * torch.arcsinh((X - mu)/(2.0 * std)*k) / np.arcsinh(k)
+            # X = tau * torch.arcsinh((X - mu)/tau*k) / np.arcsinh(k)
+
         if not NO_SOFTMAX:
             X = F.softmax(X, dim=-1)
         return X

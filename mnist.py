@@ -497,6 +497,11 @@ class Model(nn.Module):
 
     @torch.profiler.record_function("mnist::Model::FWD")
     def forward(self, X):
+        with torch.no_grad():
+            S = torch.sum(X, dim=-1)
+            self.log_input_mean = torch.mean(S).item()
+            self.log_input_std = torch.std(S).item()
+            self.log_input_norm = torch.norm(S).item()
         I = X
         R = [I]
         for layer_idx in range(0, len(self.layers)):
@@ -517,6 +522,13 @@ class Model(nn.Module):
                                 # 2) it ensures no discrepancy between VALIDATION step during training vs STANDALONE inference
 
         gain = MANUAL_GAIN
+        with torch.no_grad():
+            self.log_applied_gain = gain
+            self.log_pregain_mean = torch.mean(X).item()
+            self.log_pregain_std = torch.std(X).item()
+            self.log_pregain_min = torch.min(X).item()
+            self.log_pregain_max = torch.max(X).item()
+            self.log_pregain_norm = torch.norm(X).item()
         X = X / gain
 
         if SCALE_LOGITS == "TANH":
@@ -530,7 +542,7 @@ class Model(nn.Module):
             rng = torch.max(X).item() - torch.min(X).item()
             f = self.outputs_per_category / rng
             X = X / f / SCALE_TARGET
-            self.fwd_applied_gain = f * SCALE_TARGET
+            self.log_applied_gain = f * SCALE_TARGET
         elif SCALE_LOGITS == "ADATAU": # TAU_LR=0.001 SCALE_TARGET 0.75 -> 96.6 LLLLx1000
             rng = torch.max(X).item() - torch.min(X).item()
             t = rng / self.outputs_per_category
@@ -542,7 +554,7 @@ class Model(nn.Module):
                 self.adatau *= 1.0-TAU_LR*100 # faster falloff
             self.adatau = min(self.adatau, 100)
             X = X / self.adatau
-            self.fwd_applied_gain = self.adatau
+            self.log_applied_gain = self.adatau
         elif SCALE_LOGITS == "ADATAU2":
             rng = torch.max(X).item() - torch.min(X).item()
             t = rng / self.outputs_per_category
@@ -552,7 +564,7 @@ class Model(nn.Module):
                 self.adatau = self.adatau * (1-TAU_LR) + (1 / t) * TAU_LR
             self.adatau = min(self.adatau, 100)
             X = X / self.adatau
-            self.fwd_applied_gain = self.adatau
+            self.log_applied_gain = self.adatau
         elif SCALE_LOGITS == "ADATAU4": # SCALE_TARGET=.7 TAU_LR=.001
             rng = torch.max(X).item() - torch.min(X).item()
             t = rng / self.outputs_per_category
@@ -560,7 +572,7 @@ class Model(nn.Module):
             self.adatau = max(self.adatau, .1)
             self.adatau = min(self.adatau, 100)
             X = X / self.adatau
-            self.fwd_applied_gain = self.adatau
+            self.log_applied_gain = self.adatau
         elif SCALE_LOGITS == "ADAVAR0":
             # std = torch.std(X, dim=0)
             std = torch.std(X).item()
@@ -571,7 +583,7 @@ class Model(nn.Module):
                 self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
             self.adatau = min(self.adatau, self.outputs_per_category / 6)
             X = X / self.adatau
-            self.fwd_applied_gain = self.adatau
+            self.log_applied_gain = self.adatau
         elif SCALE_LOGITS == "ADAVAR":      # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.96/97.57% Lx8000 (20epochs)
                                             # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.99/97.73% LFFx8000 (30epochs)
                                             # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.86/96.79% LFFFFFx8000 (30epochs)
@@ -585,7 +597,7 @@ class Model(nn.Module):
                 self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
             self.adatau = min(self.adatau, self.outputs_per_category / 6)
             X = X / self.adatau
-            self.fwd_applied_gain = self.adatau
+            self.log_applied_gain = self.adatau
         elif SCALE_LOGITS == "ADAVAR_TANH": # SCALE_TARGET=1 TAU_LR=.01               ->    98.71/97.44% Lx8000 (20epochs)
             std = torch.std(X).item()
             t = std / (4.0 * SCALE_TARGET)
@@ -595,7 +607,7 @@ class Model(nn.Module):
                 self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
             self.adatau = min(self.adatau, self.outputs_per_category / 6)
             X = X / self.adatau
-            self.fwd_applied_gain = self.adatau
+            self.log_applied_gain = self.adatau
             mu = torch.mean(X, dim=0)
             std = torch.std(X).item()
             X = (3.0 * std) * torch.tanh((X - mu)/(3.0 * std))
@@ -611,7 +623,7 @@ class Model(nn.Module):
                 self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
             self.adatau = min(self.adatau, self.outputs_per_category / 6)
             X = X / self.adatau
-            self.fwd_applied_gain = self.adatau
+            self.log_applied_gain = self.adatau
             k = 2
             mu = torch.mean(X, dim=0)
             std = torch.std(X).item()
@@ -619,11 +631,11 @@ class Model(nn.Module):
         elif SCALE_LOGITS == "AUTOTAU":
             tau = np.sqrt(self.outputs_per_category / (4.0 * SCALE_TARGET))
             X = X / tau
-            self.fwd_applied_gain = tau
+            self.log_applied_gain = tau
         elif SCALE_LOGITS == "AUTOTAU_TANH":
             tau = np.sqrt(self.outputs_per_category / (6.0 * SCALE_TARGET))
             X = X / tau
-            self.fwd_applied_gain = tau
+            self.log_applied_gain = tau
             mu = torch.mean(X, dim=0)
             X = tau * torch.tanh((X - mu)/tau)
         elif SCALE_LOGITS == "AUTOTAU_ARCSINH" or \
@@ -631,12 +643,18 @@ class Model(nn.Module):
                                                     #                                       ??.??/(?)95.93% LLLLx1000 (50 epochs)
             tau = np.sqrt(self.outputs_per_category / (6.0 * SCALE_TARGET))
             X = X / tau
-            self.fwd_applied_gain = tau
+            self.log_applied_gain = tau
             k = 2
             mu = torch.mean(X, dim=0)
             std = torch.std(X).item()
             X = (2.0 * std) * torch.arcsinh((X - mu)/(2.0 * std)*k) / np.arcsinh(k)
             # X = tau * torch.arcsinh((X - mu)/tau*k) / np.arcsinh(k)
+
+
+        with torch.no_grad():
+            self.log_logits_mean = torch.mean(X).item()
+            self.log_logits_std = torch.std(X).item()
+            self.log_logits_norm = torch.norm(X).item()
 
         if not NO_SOFTMAX:
             X = F.softmax(X, dim=-1)
@@ -851,7 +869,7 @@ validate = get_validate(model)
 val_loss, val_accuracy = validate(dataset="val")
 passthrough_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_passthrough_fraction()])
 unique_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_unique_fraction()])
-log(f"INIT VAL loss={val_loss:6.3f} acc={val_accuracy*100:6.2f}%                  - Pass {passthrough_log} | Connectivity {unique_log}")
+log(f"INIT VAL loss={val_loss:6.3f} acc={val_accuracy*100:6.2f}%                 - Pass {passthrough_log} | Connectivity {unique_log}")
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
 
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
@@ -899,9 +917,16 @@ for i in range(TRAINING_STEPS):
 
     # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:
-        passthrough_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_passthrough_fraction()])
-        unique_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_unique_fraction()])
-        log(f"Iteration {i + 1:10} - Loss {loss:6.3f} - RegLoss {(1-loss_ce/loss)*100:3.0f}% - Pass {passthrough_log} | Connectivity {unique_log}")
+        passthrough_log = " ".join([f"{value * 100:2.0f}" for value in model.get_passthrough_fraction()])
+        unique_log = " ".join([f"{value * 100:2.0f}" for value in model.get_unique_fraction()])
+        # grad_log = ", ".join([f"{value.grad.std():.0e}" for value in model.parameters()])
+        # grad_log = ", ".join([f"{value.grad.std():2.3e}" for value in model.parameters()])
+        grad_log = " ".join([f"{torch.log10(value.grad.std())*10:2.0f}" for value in model.parameters()])
+        # inputs_log = f"μ{model.log_input_mean:.2f}±{model.log_input_std:.2f}"
+        # self.log_input_norm = torch.norm(X).item()
+        # logits_log = f"μ{model.log_pregain_mean:.0f}±{model.log_pregain_std:.1f}*{1.0/model.log_applied_gain:0.3f} v{model.log_pregain_min:.0f}^{model.log_pregain_max:.0f}= μ{model.log_logits_mean:.0f}±{model.log_logits_std:.1f} ‖{model.log_logits_norm:.0f}‖"
+        logits_log = f"{model.log_pregain_min:.0f}..{model.log_pregain_max:.0f} μ{model.log_pregain_mean:.0f}±{model.log_pregain_std:.1f}/{model.log_applied_gain:.1f} = ±{model.log_logits_std:.1f} ‖{model.log_logits_norm:.0f}‖"
+        log(f"Iteration {i + 1:10} - Loss {loss:6.3f} - RegLoss {(1-loss_ce/loss)*100:2.0f}% - Pass (%) {passthrough_log} | Conn (%) {unique_log} | e-∇x10 {grad_log} | Logits {logits_log}")
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, 
             "tension_loss":tension_loss, })

@@ -37,6 +37,8 @@ from dotenv import dotenv_values
 config = { **dotenv_values(".env"), **os.environ }
 
 # PASS_INPUT_TO_ALL_LAYERS=1 C_INIT="XAVIER_U" C_SPARSITY=10 G_SPARSITY=1 OPT_GATE16_CODEPATH=3 KINETO_LOG_LEVEL=99 GATE_ARCHITECTURE="[2000,2000]" INTERCONNECT_ARCHITECTURE="[]" PRINTOUT_EVERY=211 EPOCHS=300 uv run mnist.py
+# CONNECTIVITY_GAIN=1 LEARNING_RATE=0.001 PASS_RESIDUAL=0 PASS_INPUT_TO_ALL_LAYERS=0 C_INIT="NORMAL" C_SPARSITY=100 C_INIT_PARAM=0 GATE_ARCHITECTURE="[250,250,250,250,250,250]"PRINTOUT_EVERY=55 VALIDATE_EVERY=211 EPOCHS=200 uv run mnist.py
+# LEARNING_RATE=0.075 C_SPARSITY=1 NO_SOFTMAX=1 SCALE_TARGET=1.5 SCALE_LOGITS="ADAVAR" TAU_LR=.03 MANUAL_GAIN=1 PASS_RESIDUAL=0 PASS_INPUT_TO_ALL_LAYERS=0 KINETO_LOG_LEVEL=99 GATE_ARCHITECTURE="[8000]" INTERCONNECT_ARCHITECTURE="[]" PRINTOUT_EVERY=211 VALIDATE_EVERY=1055 IMG_WIDTH=28 EPOCHS=30 uv run mnist.py
 
 LOG_TAG = config.get("LOG_TAG", "MNIST")
 TIMEZONE = config.get("TIMEZONE", "UTC")
@@ -55,20 +57,20 @@ ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true
 
 SEED = config.get("SEED", random.randint(0, 1024*1024))
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000,8000,8000, 8000,8000,8000]")) # previous: "[1300,1300,1300]")) resnet95: [2000, 2000] conn_gain96: "[2250, 2250, 2250]"
-INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[],[-1],[-1], [-1],[-1],[-1]]")) # previous: "[[32, 325], [26, 52], [26, 52]]")) resnet95, conn_gain96: []
+GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000]")) # previous: [1300,1300,1300] resnet95: [2000, 2000] conn_gain96: [2250, 2250, 2250] power_law_fixed97: [8000,8000,8000, 8000,8000,8000]
+INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[]")) # previous: [[32, 325], [26, 52], [26, 52]])) resnet95, conn_gain96: [] power_law_fixed97: [[],[-1],[-1], [-1],[-1],[-1]]
 if not INTERCONNECT_ARCHITECTURE or INTERCONNECT_ARCHITECTURE == []:
     INTERCONNECT_ARCHITECTURE = [[] for g in GATE_ARCHITECTURE]
 assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
-EPOCHS = int(config.get("EPOCHS", 200)) # previous: 50
+EPOCHS = int(config.get("EPOCHS", 30)) # previous: 50
 EPOCH_STEPS = round(54_000 / BATCH_SIZE) # 54K train /6K val/10K test
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS * 5)) # previous EPOCH_STEPS // 4, changed to reduce the frequency of connectivy_gain updates
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
 
-LEARNING_RATE = float(config.get("LEARNING_RATE", 0.01)) # conn_gain96: 0.03
+LEARNING_RATE = float(config.get("LEARNING_RATE", 0.075)) # conn_gain96, power_law_fixed_conn97: 0.03
 
 TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
@@ -87,7 +89,7 @@ COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM, PASSTHROUGH, XOR
 C_INIT_PARAM = float(config.get("C_INIT_PARAM", -1.0))
-C_SPARSITY = float(config.get("C_SPARSITY", 3.0)) # previous: 5
+C_SPARSITY = float(config.get("C_SPARSITY", 1.0)) # NOTE: 1.0 works well only for SHALLOW nets, 3.0 for deeper is necessary to binarize well
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 
 PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "0").lower() in ("true", "1", "yes") # previous: 1
@@ -96,8 +98,8 @@ PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 MANUAL_GAIN = float(config.get("MANUAL_GAIN", 1.0))
 
 NO_SOFTMAX = config.get("NO_SOFTMAX", "1").lower() in ("true", "1", "yes") # previous: 0
-SCALE_LOGITS = config.get("SCALE_LOGITS", "0") # TANH, ARCSINH, BN, MINMAX, ADATAU
-SCALE_TARGET = float(config.get("SCALE_TARGET", 1.0))
+SCALE_LOGITS = config.get("SCALE_LOGITS", "ADAVAR") # TANH, ARCSINH, BN, MINMAX, ADATAU, ADAVAR, AUTOAU, ADAVAR_ASH, AUTOAU_ASH
+SCALE_TARGET = float(config.get("SCALE_TARGET", 1.5)) # NOTE: 1.5 works well only for SHALLOW nets, 1.0 is better for deeper networks combined with C_SPARCITY=3
 if SCALE_TARGET == 0:
     SCALE_LOGITS = "0"
 TAU_LR = float(config.get("TAU_LR", 0.001))
@@ -584,10 +586,12 @@ class Model(nn.Module):
             self.adatau = min(self.adatau, self.outputs_per_category / 6)
             X = X / self.adatau
             self.log_applied_gain = self.adatau
-        elif SCALE_LOGITS == "ADAVAR":      # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.96/97.57% Lx8000 (20epochs)
+        elif SCALE_LOGITS == "ADAVAR":      # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.96/97.57% Lx8000 (30epochs)
                                             # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.99/97.73% LFFx8000 (30epochs)
                                             # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.86/96.79% LFFFFFx8000 (30epochs)
                                             # SCALE_TARGET=1   TAU_LR=.03 C_SPARSITY=1 ->   99.91/97.47% LFFFFFx8000 (30epochs)
+                                            # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.48/96.73% Lx2000 (30epochs)
+                                            # SCALE_TARGET=1   TAU_LR=.03 C_SPARSITY=1 ->   98.63/97.04% Lx2000 (30epochs)
                                             # SCALE_TARGET=1   TAU_LR=.01              ->   97.62/96.32% LLLLx1000 (50 epochs)
             std = torch.std(X).item()
             t = std / (4.0 * SCALE_TARGET)

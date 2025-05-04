@@ -14,6 +14,7 @@
 # ///
 # pip install wandb python-dotenv python-telegram-bot asyncio
 
+import math
 import random
 import torch
 import torch.nn as nn
@@ -65,7 +66,7 @@ assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
 EPOCHS = int(config.get("EPOCHS", 30)) # previous: 50
-EPOCH_STEPS = round(54_000 / BATCH_SIZE) # 54K train /6K val/10K test
+EPOCH_STEPS = math.floor((60_000 * TRAIN_FRACTION) / BATCH_SIZE) # MNIST consist of 60K images
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS * 5)) # previous EPOCH_STEPS // 4, changed to reduce the frequency of connectivy_gain updates
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))

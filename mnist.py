@@ -403,13 +403,10 @@ class BlockSparseInterconnect(nn.Module):
 class TopKSparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, topk, name=''):
         super(TopKSparseInterconnect, self).__init__()
-        # self.c = nn.Parameter(torch.zeros((inputs, outputs), dtype=torch.float32))
-        # nn.init.normal_(self.c, mean=0.0, std=1)
         with torch.no_grad():
             cc = torch.normal(mean=0.0, std=1, size=(inputs, outputs))
             top_indices = torch.zeros((topk, outputs), dtype=torch.long)
         self.top_c = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.float32))
-        # self.top_indices = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.long))
         with torch.no_grad():
             torch.topk(cc, topk, dim=0, largest=True, sorted=False, out=(self.top_c, top_indices))
         self.register_buffer("top_indices", top_indices)

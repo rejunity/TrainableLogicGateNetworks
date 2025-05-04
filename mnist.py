@@ -68,8 +68,8 @@ BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 EPOCHS = int(config.get("EPOCHS", 30)) # previous: 50
 EPOCH_STEPS = math.floor((60_000 * TRAIN_FRACTION) / BATCH_SIZE) # MNIST consist of 60K images
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
-PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS * 5)) # previous EPOCH_STEPS // 4, changed to reduce the frequency of connectivy_gain updates
-VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
+PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS))
+VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS * 5))
 
 LEARNING_RATE = float(config.get("LEARNING_RATE", 0.075)) # conn_gain96, power_law_fixed_conn97: 0.03
 

@@ -375,6 +375,46 @@ class BlockSparseInterconnect(nn.Module):
         percent = params * 100 / fc_params
         return f"BlockSparseInterconnect({self.layer_inputs} -> {self.layer_outputs // 2}x2 @ {percent:.1f}%)"
 
+class TopKSparseInterconnect(nn.Module):
+    def __init__(self, inputs, outputs, topk, name=''):
+        super(TopKSparseInterconnect, self).__init__()
+        # self.c = nn.Parameter(torch.zeros((inputs, outputs), dtype=torch.float32))
+        # nn.init.normal_(self.c, mean=0.0, std=1)
+        with torch.no_grad():
+            cc = torch.normal(mean=0.0, std=1, size=(inputs, outputs))
+            top_indices = torch.zeros((topk, outputs), dtype=torch.long)
+        self.top_c = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.float32))
+        # self.top_indices = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.long))
+        with torch.no_grad():
+            torch.topk(cc, topk, dim=0, largest=True, sorted=False, out=(self.top_c, top_indices))
+        self.register_buffer("top_indices", top_indices)
+        self.inputs = inputs
+        self.name = name
+        self.binarized = False
+    
+    @torch.profiler.record_function("mnist::TopKSparse::FWD")
+    def forward(self, x):
+        if self.binarized:
+            return torch.matmul(x, self.c)
+
+        x = x[:, self.top_indices]
+        top_connections = F.softmax(self.top_c * C_SPARSITY, dim=0)
+        return (x * top_connections).sum(dim=1)
+
+    def binarize(self, bin_value=1):
+        with torch.no_grad():
+            outputs = self.top_c.shape[1]
+            top1 = torch.argmax(self.top_c, dim=0)
+            write_indices = self.top_indices[top1, torch.arange(outputs)]
+            c = torch.zeros((self.inputs, outputs), dtype=torch.float32, device=device)
+            c.scatter_(dim=0, index=write_indices.unsqueeze(0), value=bin_value)
+            self.register_buffer("c", c)
+            self.binarized = True
+
+    def __repr__(self):
+        percent = self.top_c.shape[0] * 100 / self.inputs
+        return f"TopKSparseInterconnect({self.inputs} -> {self.top_c.shape[1] // 2}x2 @ {percent:.2f}%)"
+
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, name=''):
         super(LearnableGate16Array, self).__init__()
@@ -481,7 +521,9 @@ class Model(nn.Module):
         layer_inputs = input_size
         R = [input_size]
         for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
-            if   len(interconnect_params) == 1 and interconnect_params[0] > 0:
+            if   len(interconnect_params) == 2 and (interconnect_params[0] == "k" or interconnect_params[0] == "top_k"):
+                interconnect = TopKSparseInterconnect       (layer_inputs, layer_gates*2, topk=        interconnect_params[1],  name=f"i_{layer_idx}")
+            elif len(interconnect_params) == 1 and interconnect_params[0] > 0:
                 interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],  name=f"i_{layer_idx}")
             elif len(interconnect_params) == 1 and interconnect_params[0] < 0:
                 interconnect = FixedPowerLawInterconnect    (layer_inputs, layer_gates*2, alpha=      -interconnect_params[0],  name=f"i_{layer_idx}")

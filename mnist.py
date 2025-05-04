@@ -303,7 +303,6 @@ class SparseInterconnect(nn.Module):
     
     @torch.profiler.record_function("mnist::Sparse::FWD")
     def forward(self, x):
-        batch_size = x.shape[0]
         connections = F.softmax(self.c * C_SPARSITY, dim=0) if not self.binarized else self.c
         return torch.matmul(x, connections)
 

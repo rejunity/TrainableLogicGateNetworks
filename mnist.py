@@ -52,21 +52,21 @@ BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", 0.75))
 IMG_WIDTH = int(config.get("IMG_WIDTH", 28)) # previous 16 which was suitable for Tiny Tapeout
 INPUT_SIZE = IMG_WIDTH * IMG_WIDTH
 DATA_SPLIT_SEED = int(config.get("DATA_SPLIT_SEED", 42))
-TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.9))
+TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.99)) # previous 0.9, NOTE: since we are not using VALIDATION subset in VALIDATION pass, we can boost accuracy a bit by training on the whole dataset
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
 ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true", "1", "yes")
 
 SEED = config.get("SEED", random.randint(0, 1024*1024))
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000]")) # previous: [1300,1300,1300] resnet95: [2000, 2000] conn_gain96: [2250, 2250, 2250] power_law_fixed97: [8000,8000,8000, 8000,8000,8000]
-INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[]")) # previous: [[32, 325], [26, 52], [26, 52]])) resnet95, conn_gain96: [] power_law_fixed97: [[],[-1],[-1], [-1],[-1],[-1]]
+GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000,8000]")) # previous: [1300,1300,1300] resnet95: [2000, 2000] conn_gain96: [2250, 2250, 2250] power_law_fixed97: [8000,8000,8000, 8000,8000,8000] auto_scale_logits_97_5 [8000]
+INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[],['k',5]]")) # previous: [[32, 325], [26, 52], [26, 52]])) resnet95, conn_gain96, auto_scale_logits_97_5: [] power_law_fixed97: [[],[-1],[-1], [-1],[-1],[-1]] p
 if not INTERCONNECT_ARCHITECTURE or INTERCONNECT_ARCHITECTURE == []:
     INTERCONNECT_ARCHITECTURE = [[] for g in GATE_ARCHITECTURE]
 assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
 EPOCHS = int(config.get("EPOCHS", 30)) # previous: 50
-EPOCH_STEPS = math.floor((60_000 * TRAIN_FRACTION) / BATCH_SIZE) # MNIST consist of 60K images
+EPOCH_STEPS = math.floor((60_000 * TRAIN_FRACTION) / BATCH_SIZE) # MNIST consists of 60K images
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS))
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS * 5))
@@ -103,7 +103,7 @@ SCALE_LOGITS = config.get("SCALE_LOGITS", "ADAVAR") # TANH, ARCSINH, BN, MINMAX,
 SCALE_TARGET = float(config.get("SCALE_TARGET", 1.5)) # NOTE: 1.5 works well only for SHALLOW nets, 1.0 is better for deeper networks combined with C_SPARCITY=3
 if SCALE_TARGET == 0:
     SCALE_LOGITS = "0"
-TAU_LR = float(config.get("TAU_LR", 0.001))
+TAU_LR = float(config.get("TAU_LR", 0.03))
 if TAU_LR == 0 and SCALE_LOGITS.startswith("ADATAU"):
     SCALE_LOGITS = "0"
 

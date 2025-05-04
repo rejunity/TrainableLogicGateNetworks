@@ -399,6 +399,7 @@ class BlockSparseInterconnect(nn.Module):
 # L1000_K8000, K=5  acc_bin_train=99.83% <<<<<  train_acc_diff=0.14% acc_train=99.96%    acc_bin_TEST=97.33%    --- winner
 # L1000_L8000       acc_bin_train=98.86%        train_acc_diff=1.12% acc_train=99.99% << acc_bin_TEST=96.79%    --- slow to binarize!
 
+# TODO: try PyTorch COO sparse tensor functionality and compare the speed
 class TopKSparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, topk, name=''):
         super(TopKSparseInterconnect, self).__init__()

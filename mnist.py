@@ -375,6 +375,29 @@ class BlockSparseInterconnect(nn.Module):
         percent = params * 100 / fc_params
         return f"BlockSparseInterconnect({self.layer_inputs} -> {self.layer_outputs // 2}x2 @ {percent:.1f}%)"
 
+# EPOCHS=30  C_SPARSITY=1 LEARNING_RATE=0.075 TAU_LR=.03 SCALE_TARGET=1.5 SCALE_LOGITS="ADAVAR" MANUAL_GAIN=1 GATE_ARCHITECTURE="[1000]"
+# F1000, α=1   ->   acc_bin_train=67.14%        train_acc_diff=20.94% acc_train=88.07%   acc_bin_TEST=60.34%
+# F1000, α=1   ->   acc_bin_train=84.29%        train_acc_diff= 0.93% acc_train=85.22%   acc_bin_TEST=84.40% SCALE_LOGITS="TAU" MANUAL_GAIN=3
+# K1000, K=5   ->   acc_bin_train=89.67%        train_acc_diff= 5.05% acc_train=94.72%   acc_bin_TEST=88.02%
+# K1000, K=25  ->   acc_bin_train=94.22%        train_acc_diff= 3.81% acc_train=98.03%   acc_bin_TEST=92.53%    --- top 25 is not enough for the input layer!
+# L1000        ->   acc_bin_train=97.21% <<<<<  train_acc_diff= 2.36% acc_train=99.56% < acc_bin_TEST=94.66%    --- winner
+
+# EPOCHS=30  C_SPARSITY=1 LEARNING_RATE=0.075 TAU_LR=.03 SCALE_TARGET=1.5 SCALE_LOGITS="ADAVAR" MANUAL_GAIN=1 GATE_ARCHITECTURE="[1000,1000]"
+# LF1000, α=1  ->   acc_bin_train=95.98%        train_acc_diff=3.72% acc_train=99.70%    acc_bin_TEST=93.21%
+# LF1000, α=2  ->   acc_bin_train=95.73%        train_acc_diff=3.97% acc_train=99.71%    acc_bin_TEST=93.95%
+# LK1000, K=1  ->   acc_bin_train=95.82%        train_acc_diff=3.81% acc_train=99.63%    acc_bin_TEST=93.94%
+# LK1000, K=3  ->   acc_bin_train=96.44%        train_acc_diff=3.25% acc_train=99.69%    acc_bin_TEST=94.18%
+# LK1000, K=5  ->   acc_bin_train=96.75% <<<<<  train_acc_diff=2.98% acc_train=99.73%    acc_bin_TEST=94.31%    --- winner
+# LK1000, K=10 ->   acc_bin_train=96.43%        train_acc_diff=3.25% acc_train=99.68%    acc_bin_TEST=94.35%
+# LK1000, K=20 ->   acc_bin_train=95.34%        train_acc_diff=4.36% acc_train=99.70%    acc_bin_TEST=93.71%
+# LL1000       ->   acc_bin_train=96.57%        train_acc_diff=3.24% acc_train=99.82% << acc_bin_TEST=93.96%
+
+
+# EPOCHS=30  C_SPARSITY=1 LEARNING_RATE=0.075 TAU_LR=.03 SCALE_TARGET=1.5 SCALE_LOGITS="ADAVAR" MANUAL_GAIN=1 GATE_ARCHITECTURE="[1000,8000]"
+# L1000_F8000, α=1  acc_bin_train=99.49%        train_acc_diff=0.37% acc_train=99.86%    acc_bin_TEST=97.09%
+# L1000_K8000, K=5  acc_bin_train=99.83% <<<<<  train_acc_diff=0.14% acc_train=99.96%    acc_bin_TEST=97.33%    --- winner
+# L1000_L8000       acc_bin_train=98.86%        train_acc_diff=1.12% acc_train=99.99% << acc_bin_TEST=96.79%    --- slow to binarize!
+
 class TopKSparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, topk, name=''):
         super(TopKSparseInterconnect, self).__init__()

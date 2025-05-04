@@ -372,7 +372,8 @@ class BlockSparseInterconnect(nn.Module):
         fc_params = self.layer_inputs * self.layer_outputs
         params  = self.n_blocks_in_sub_layer_1 * self.inputs_per_block_in_sub_layer_1 * self.outputs_per_block_in_sub_layer_1 + \
                   self.n_blocks_in_sub_layer_2 * self.inputs_per_block_in_sub_layer_2 * self.outputs_per_block_in_sub_layer_2
-        return f"BlockSparseInterconnect({self.layer_inputs} -> {self.layer_outputs // 2}x2 @ {(params * 100 / fc_params):.1f}%)"
+        percent = params * 100 / fc_params
+        return f"BlockSparseInterconnect({self.layer_inputs} -> {self.layer_outputs // 2}x2 @ {percent:.1f}%)"
 
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, name=''):

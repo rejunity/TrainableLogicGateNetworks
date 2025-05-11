@@ -1111,6 +1111,10 @@ for i in range(TRAINING_STEPS):
         _, bin_train_acc = validate(dataset="train", model=model_binarized)
         train_acc_diff = train_acc-bin_train_acc
         log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS} BIN TRN            acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
+
+        test_loss, test_acc = validate('test')
+        test_acc_diff = train_acc-test_acc
+        log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS}     TST            acc={test_acc*100:.2f}%, test_acc_diff= {test_acc_diff*100:.2f}%, loss={test_loss:.3f}")
         
         top1w = torch.tensor(0., device=device)
         top2w = torch.tensor(0., device=device)

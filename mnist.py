@@ -209,6 +209,22 @@ class Dropout01(nn.Module):
     def __repr__(self):
         return f"Dropout01(p={self.p})"
 
+class DropoutFlip(nn.Module):
+    def __init__(self, p: float = 0.5):
+        super(DropoutFlip, self).__init__()
+        if not 0 <= p < 1:
+            raise ValueError("Dropout probability must be in the range [0, 1).")
+        self.p = p
+
+    def forward(self, x):
+        if not self.training or self.p == 0:
+            return x
+
+        return torch.where(torch.rand_like(x) > self.p, x, 1-x)
+
+    def __repr__(self):
+        return f"DropoutFlip(p={self.p})"
+
 class FixedPowerLawInterconnect(nn.Module):
     def __init__(self, inputs, outputs, alpha, x_min=1.0, name=''):
         super(FixedPowerLawInterconnect, self).__init__()
@@ -584,8 +600,10 @@ class Model(nn.Module):
                 layer_inputs += R[-2]
         self.layers = nn.ModuleList(layers_)
 
-        if DROPOUT > 0:
+        if DROPOUT > 0.0001:
             self.dropout = Dropout01(p=DROPOUT)
+        elif DROPOUT < -0.0001:
+            self.dropout = DropoutFlip(p=-DROPOUT)
 
     @torch.profiler.record_function("mnist::Model::FWD")
     def forward(self, X):

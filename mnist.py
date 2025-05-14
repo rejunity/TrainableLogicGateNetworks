@@ -1103,6 +1103,7 @@ def get_validate(default_model):
                 val_loss += F.cross_entropy(val_output, y_val, reduction="sum").item()
                 correct += (val_output.argmax(dim=1) == y_val.argmax(dim=1)).sum().item()
             val_steps += len(x_val)
+        assert val_steps == number_of_samples
         val_loss /= val_steps
         val_accuracy = correct / val_steps
         return val_loss, val_accuracy

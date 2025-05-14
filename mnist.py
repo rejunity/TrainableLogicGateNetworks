@@ -806,15 +806,16 @@ class Model(nn.Module):
             # TODO: better to measure only unique indices that point to the previous layer and ignore skip connections:
             # ... = sum(unique_indices < previous_layer.c.shape[1])
             if hasattr(model_layer, 'c'):
-                c = model_layer.c.view(model_layer.c.shape[0], -1, 2)
-                A = c[:,:,0]
-                B = c[:,:,1]
-                unique_indices_a = torch.unique(torch.argmax(A, dim=0)).numel()
-                unique_indices_b = torch.unique(torch.argmax(B, dim=0)).numel()
-                #print(torch.unique(torch.argmax(model_layer.c, dim=0)).numel(), unique_indices_a, unique_indices_b, "vs", model_layer.c.shape)
-                unique_indices = (unique_indices_a + unique_indices_b) * 0.5
-                min_dimension = min(model_layer.c.shape[0], model_layer.c.shape[1] // 2)
-                unique_fraction_array.append(unique_indices / min_dimension)
+                unique_indices = torch.unique(torch.argmax(model_layer.c, dim=0)).numel()
+                unique_fraction_array.append(unique_indices / model_layer.c.shape[0])
+            elif hasattr(model_layer, 'top_c') and hasattr(model_layer, 'top_indices'):
+                outputs = model_layer.top_c.shape[1]
+                top1 = torch.argmax(model_layer.top_c, dim=0)
+                indices = model_layer.top_indices[top1, torch.arange(outputs)]
+                max_inputs = indices.max().item() # approximation
+                unique_indices = torch.unique(indices).numel()
+                unique_fraction_array.append(unique_indices / max_inputs)
+                # unique_fraction_array.append(unique_indices / 100)
             elif hasattr(model_layer, 'indices'):
                 max_inputs = model_layer.indices.max().item() # approximation
                 unique_indices = torch.unique(model_layer.indices).numel()
@@ -1109,7 +1110,7 @@ for i in range(TRAINING_STEPS):
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, 
             "tension_loss":tension_loss, })
-    if (i + 1) % VALIDATE_EVERY == 0:
+    if (i + 1) % VALIDATE_EVERY == 0 or (i + 1) == TRAINING_STEPS:
         current_epoch = (i+1) // EPOCH_STEPS
 
         train_loss, train_acc = validate('train')

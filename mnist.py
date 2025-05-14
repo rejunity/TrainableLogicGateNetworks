@@ -808,6 +808,14 @@ class Model(nn.Module):
             if hasattr(model_layer, 'c'):
                 unique_indices = torch.unique(torch.argmax(model_layer.c, dim=0)).numel()
                 unique_fraction_array.append(unique_indices / model_layer.c.shape[0])
+            elif hasattr(model_layer, 'top_c') and hasattr(model_layer, 'top_indices'):
+                outputs = model_layer.top_c.shape[1]
+                top1 = torch.argmax(model_layer.top_c, dim=0)
+                indices = model_layer.top_indices[top1, torch.arange(outputs)]
+                max_inputs = indices.max().item() # approximation
+                unique_indices = torch.unique(indices).numel()
+                unique_fraction_array.append(unique_indices / max_inputs)
+                # unique_fraction_array.append(unique_indices / 100)
             elif hasattr(model_layer, 'indices'):
                 max_inputs = model_layer.indices.max().item() # approximation
                 unique_indices = torch.unique(model_layer.indices).numel()

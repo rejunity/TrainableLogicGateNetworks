@@ -895,7 +895,6 @@ class Model(nn.Module):
                 max_inputs = indices.max().item() # approximation
                 unique_indices = torch.unique(indices).numel()
                 unique_fraction_array.append(unique_indices / max_inputs)
-                # unique_fraction_array.append(unique_indices / 100)
             elif hasattr(model_layer, 'indices'):
                 max_inputs = model_layer.indices.max().item() # approximation
                 unique_indices = torch.unique(model_layer.indices).numel()

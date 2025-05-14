@@ -1110,7 +1110,7 @@ for i in range(TRAINING_STEPS):
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, 
             "tension_loss":tension_loss, })
-    if (i + 1) % VALIDATE_EVERY == 0:
+    if (i + 1) % VALIDATE_EVERY == 0 or (i + 1) == TRAINING_STEPS:
         current_epoch = (i+1) // EPOCH_STEPS
 
         train_loss, train_acc = validate('train')

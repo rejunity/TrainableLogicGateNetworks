@@ -1142,7 +1142,17 @@ time_start = time.time()
 
 if PROFILE: prof.start()
 for i in range(TRAINING_STEPS):
-    indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
+    if LEGACY:
+        indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
+    else:
+        # shuffle dataset instead of random sampling
+        start_idx = (i * BATCH_SIZE) % train_dataset_samples
+        end_idx = min(start_idx + BATCH_SIZE, train_dataset_samples)
+        if start_idx < BATCH_SIZE:
+            all_indices = torch.randperm(train_dataset_samples, device=device)
+        indices = all_indices[start_idx: end_idx]    
+        #indices = torch.arange(start_idx, end_idx, device=device)
+
     x = train_images[indices]
     y = train_labels[indices]
     optimizer.zero_grad()

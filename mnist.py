@@ -342,6 +342,8 @@ class SparseInterconnect(nn.Module):
                 self.c.data = torch.log(W)
         elif C_INIT == "UNIFORM":
             nn.init.uniform_(self.c, a=0.0, b=1.0)
+        elif C_INIT == "UNIFORM_10":
+            nn.init.uniform_(self.c, a=0.0, b=10.0)
         else:
             nn.init.normal_(self.c, mean=0.0, std=1)
         self.name = name

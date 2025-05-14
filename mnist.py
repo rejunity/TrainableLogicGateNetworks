@@ -603,7 +603,7 @@ class Model(nn.Module):
         if DROPOUT > 0.0001:
             self.dropout = Dropout01(p=DROPOUT)
         elif DROPOUT < -0.0001:
-            self.dropout = DropoutFlip(p=-DROPOUT)
+            self.dropout_last = Dropout01(p=-DROPOUT)
 
     @torch.profiler.record_function("mnist::Model::FWD")
     def forward(self, X):
@@ -627,6 +627,8 @@ class Model(nn.Module):
                 if hasattr(self, 'dropout'):
                     X = self.dropout(X)
 
+        if hasattr(self, 'dropout_last'):
+            X = self.dropout_last(X)
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         if not self.training:   # INFERENCE ends here! Everything past this line will only concern training
             return X            # Finishing inference here is both:

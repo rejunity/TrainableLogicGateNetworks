@@ -87,7 +87,7 @@ PROFILER_ROWS = int(config.get("PROFILER_ROWS", 20))
 FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
-C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
+C_INIT = config.get("C_INIT", "DIRAC") # NORMAL, UNIFORM, DIRAC, PERMUTE_1, PERMUTE_U, PERMUTE_1_10, PERMUTE_U_10, PERMUTE_1_K, PERMUTE_U_K, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM, PASSTHROUGH, XOR
 C_INIT_PARAM = float(config.get("C_INIT_PARAM", -1.0))
 C_SPARSITY = float(config.get("C_SPARSITY", 1.0)) # NOTE: 1.0 works well only for SHALLOW nets, 3.0 for deeper is necessary to binarize well

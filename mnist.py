@@ -523,12 +523,13 @@ class TopKSparseInterconnect(nn.Module):
                     cc.scatter_add_(dim=0, index=idx, src=torch.rand(idx.shape) * i)
                 cc /= cc.max().item()
                 cc *= 10 # 10 here is inspired by the min/max range of a gaussian, which for N(0,1) is roughly -5..+5
-            elif C_INIT == "DIRAC" or C_INIT == "UNIQUE": # TODO: Dirac does not seem to be working with TopK, fallback to PERMUTE_1_10 instead
-                idx = torch.randperm(outputs, device=device) % inputs
-                idx = torch.randperm(inputs, device=device)[idx]
-                idx = idx.unsqueeze(0)
-                cc.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * 10.0) # 10 here is inspired by the min/max range of a gaussian
-                                                                                                        # which for N(0,1) is roughly -5..+5
+            # NOTE: Dirac does improve TopK performance, fallback to Gaussian initialisation instead
+            # elif C_INIT == "DIRAC" or C_INIT == "UNIQUE": 
+            #     idx = torch.randperm(outputs, device=device) % inputs
+            #     idx = torch.randperm(inputs, device=device)[idx]
+            #     idx = idx.unsqueeze(0)
+            #     cc.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * 10.0) # 10 here is inspired by the min/max range of a gaussian
+            #                                                                                             # which for N(0,1) is roughly -5..+5
             else:
                 cc = torch.normal(mean=0.0, std=1, size=(inputs, outputs))                    
 

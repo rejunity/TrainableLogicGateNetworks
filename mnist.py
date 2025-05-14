@@ -346,11 +346,12 @@ class SparseInterconnect(nn.Module):
             nn.init.uniform_(self.c, a=0.0, b=10.0)
         elif C_INIT.startswith("PERMUTE_1"): # for example: PERMUTE_1_10
             with torch.no_grad():
+                nn.init.normal_(self.c, mean=0.0, std=.01) # add a very small amount of noise as a tie-breaker
                 if  C_INIT.endswith("IN"): n = inputs
                 elif C_INIT.endswith("10"): n = 10
                 elif C_INIT.endswith("100"): n = 100
                 else: n = outputs
-                for i in range(n):
+                for i in range(1, n+1):
                     idx = torch.randperm(outputs) % inputs
                     idx = torch.randperm(inputs)[idx]
                     idx = idx.unsqueeze(0)
@@ -360,11 +361,12 @@ class SparseInterconnect(nn.Module):
                 # print(self.c.shape, self.c.sum().item(), self.c.mean().item(), self.c.min().item(), self.c.max().item())
         elif C_INIT.startswith("PERMUTE_U"): # for example: PERMUTE_U_10
             with torch.no_grad():
+                nn.init.normal_(self.c, mean=0.0, std=.01) # add a very small amount of noise as a tie-breaker
                 if  C_INIT.endswith("IN"): n = inputs
                 elif C_INIT.endswith("10"): n = 10
                 elif C_INIT.endswith("100"): n = 100
                 else: n = outputs
-                for i in range(n):
+                for i in range(1, n+1):
                     idx = torch.randperm(outputs) % inputs
                     idx = torch.randperm(inputs)[idx]
                     idx = idx.unsqueeze(0)
@@ -374,13 +376,14 @@ class SparseInterconnect(nn.Module):
                 # print(self.c.shape, self.c.sum().item(), self.c.mean().item(), self.c.min().item(), self.c.max().item())
         elif C_INIT == "DIRAC" or C_INIT == "UNIQUE":
             with torch.no_grad():
+                nn.init.normal_(self.c, mean=0.0, std=.01) # add a very small amount of noise as a tie-breaker
                 idx = torch.randperm(outputs) % inputs
                 idx = torch.randperm(inputs)[idx]
                 idx = idx.unsqueeze(0)
                 self.c.data.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * 10.0) # 10 here is inspired by the min/max range of a gaussian
                                                                                                                  # which for N(0,1) is roughly -5..+5
                                                                                                                  # and it seems to work relatively well with softmax
-            # print(self.c.shape, self.c.sum().item(), self.c.mean().item(), self.c.min().item(), self.c.max().item())
+                # print(self.c.shape, self.c.sum().item(), self.c.mean().item(), self.c.min().item(), self.c.max().item())
         else:
             nn.init.normal_(self.c, mean=0.0, std=1)
         self.name = name
@@ -491,19 +494,19 @@ class BlockSparseInterconnect(nn.Module):
 class TopKSparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, topk, name=''):
         super(TopKSparseInterconnect, self).__init__()
-        self.top_c = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.float32))
+        self.top_c = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.float32, device=device))
 
         with torch.no_grad():
-            cc = torch.zeros((inputs, outputs))
+            cc = torch.normal(mean=0.0, std=.01, size=(inputs, outputs), device=device) # tie-breaker for TopK
             if C_INIT.startswith("PERMUTE_1"): # for example: PERMUTE_1_K
                 if  C_INIT.endswith("IN"): n = inputs
                 elif C_INIT.endswith("10"): n = 10
                 elif C_INIT.endswith("100"): n = 100
                 elif C_INIT.endswith("K"): n = topk
                 else: n = outputs
-                for i in range(n):
-                    idx = torch.randperm(outputs) % inputs
-                    idx = torch.randperm(inputs)[idx]
+                for i in range(1, n+1):
+                    idx = torch.randperm(outputs, device=device) % inputs
+                    idx = torch.randperm(inputs, device=device)[idx]
                     idx = idx.unsqueeze(0)
                     cc.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * i)
                 cc /= cc.max().item()
@@ -514,26 +517,25 @@ class TopKSparseInterconnect(nn.Module):
                 elif C_INIT.endswith("100"): n = 100
                 elif C_INIT.endswith("K"): n = topk
                 else: n = outputs
-                for i in range(n):
-                    idx = torch.randperm(outputs) % inputs
-                    idx = torch.randperm(inputs)[idx]
+                for i in range(1, n+1):
+                    idx = torch.randperm(outputs, device=device) % inputs
+                    idx = torch.randperm(inputs, device=device)[idx]
                     idx = idx.unsqueeze(0)
                     cc.scatter_add_(dim=0, index=idx, src=torch.rand(idx.shape) * i)
                 cc /= cc.max().item()
                 cc *= 10 # 10 here is inspired by the min/max range of a gaussian, which for N(0,1) is roughly -5..+5
             elif C_INIT == "DIRAC" or C_INIT == "UNIQUE": # TODO: Dirac does not seem to be working with TopK, fallback to PERMUTE_1_10 instead
-                idx = torch.randperm(outputs) % inputs
-                idx = torch.randperm(inputs)[idx]
+                idx = torch.randperm(outputs, device=device) % inputs
+                idx = torch.randperm(inputs, device=device)[idx]
                 idx = idx.unsqueeze(0)
                 cc.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * 10.0) # 10 here is inspired by the min/max range of a gaussian
                                                                                                         # which for N(0,1) is roughly -5..+5
             else:
                 cc = torch.normal(mean=0.0, std=1, size=(inputs, outputs))                    
 
-            top_indices = torch.zeros((topk, outputs), dtype=torch.long)
-            torch.topk(cc, topk, dim=0, largest=True, sorted=False, out=(self.top_c, top_indices))
+            self.top_c.data, top_indices = torch.topk(cc, topk, dim=0, largest=True, sorted=True)
+            self.register_buffer("top_indices", top_indices)
 
-        self.register_buffer("top_indices", top_indices)
         self.inputs = inputs
         self.name = name
         self.binarized = False

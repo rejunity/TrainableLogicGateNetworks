@@ -200,11 +200,12 @@ class Dropout01(nn.Module):
         if not self.training or self.p == 0:
             return x
 
-        mask = (torch.rand_like(x) > self.p).float()
+        pred = torch.rand_like(x) > self.p
+        mask = pred.float()
         zero_one = (torch.rand_like(x) < 0.5).float()
 
         # return mask * x + (1 - mask) * zero_one
-        return torch.where(torch.rand_like(x) > self.p, x, zero_one)
+        return torch.where(pred, x, zero_one)
 
     def __repr__(self):
         return f"Dropout01(p={self.p})"

@@ -885,23 +885,24 @@ class Model(nn.Module):
     
     def get_unique_fraction(self):
         unique_fraction_array = []
-        for model_layer in self.layers:
-            # TODO: better to measure only unique indices that point to the previous layer and ignore skip connections:
-            # ... = sum(unique_indices < previous_layer.c.shape[1])
-            if hasattr(model_layer, 'c'):
-                unique_indices = torch.unique(torch.argmax(model_layer.c, dim=0)).numel()
-                unique_fraction_array.append(unique_indices / model_layer.c.shape[0])
-            elif hasattr(model_layer, 'top_c') and hasattr(model_layer, 'top_indices'):
-                outputs = model_layer.top_c.shape[1]
-                top1 = torch.argmax(model_layer.top_c, dim=0)
-                indices = model_layer.top_indices[top1, torch.arange(outputs)]
-                max_inputs = indices.max().item() # approximation
-                unique_indices = torch.unique(indices).numel()
-                unique_fraction_array.append(unique_indices / max_inputs)
-            elif hasattr(model_layer, 'indices'):
-                max_inputs = model_layer.indices.max().item() # approximation
-                unique_indices = torch.unique(model_layer.indices).numel()
-                unique_fraction_array.append(unique_indices / max_inputs)
+        with torch.no_grad():
+            for model_layer in self.layers:
+                # TODO: better to measure only unique indices that point to the previous layer and ignore skip connections:
+                # ... = sum(unique_indices < previous_layer.c.shape[1])
+                if hasattr(model_layer, 'c'):
+                    unique_indices = torch.unique(torch.argmax(model_layer.c, dim=0)).numel()
+                    unique_fraction_array.append(unique_indices / model_layer.c.shape[0])
+                elif hasattr(model_layer, 'top_c') and hasattr(model_layer, 'top_indices'):
+                    outputs = model_layer.top_c.shape[1]
+                    top1 = torch.argmax(model_layer.top_c, dim=0)
+                    indices = model_layer.top_indices[top1, torch.arange(outputs)]
+                    max_inputs = indices.max().item() # approximation
+                    unique_indices = torch.unique(indices).numel()
+                    unique_fraction_array.append(unique_indices / max_inputs)
+                elif hasattr(model_layer, 'indices'):
+                    max_inputs = model_layer.indices.max().item() # approximation
+                    unique_indices = torch.unique(model_layer.indices).numel()
+                    unique_fraction_array.append(unique_indices / max_inputs)
         return unique_fraction_array
 
     def compute_selected_gates_fraction(self, selected_gates):

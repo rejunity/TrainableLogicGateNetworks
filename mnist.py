@@ -109,6 +109,8 @@ if TAU_LR == 0 and SCALE_LOGITS.startswith("ADATAU"):
 
 DROPOUT = float(config.get("DROPOUT", 0.0))
 
+LEGACY = config.get("LEGACY", "0").lower() in ("true", "1", "yes")
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
@@ -1053,7 +1055,10 @@ log(f"INIT VAL loss={val_loss:6.3f} acc={val_accuracy*100:6.2f}%                
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
 
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
+if LEGACY:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
+else:
+    optimizer = torch.optim.Adam (model.parameters(), lr=LEARNING_RATE)
 time_start = time.time()
 
 if PROFILE: prof.start()

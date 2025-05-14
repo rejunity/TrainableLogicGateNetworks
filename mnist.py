@@ -714,6 +714,7 @@ class Model(nn.Module):
 
         if hasattr(self, 'dropout_last'):
             X = self.dropout_last(X)
+
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         if not self.training:   # INFERENCE ends here! Everything past this line will only concern training
             return X            # Finishing inference here is both:

@@ -242,15 +242,18 @@ class FixedPowerLawInterconnect(nn.Module):
             magnitudes = x_min * (1 - r) ** (-1 / (alpha - 1))          # Power law distribution
             signs = torch.randint(low=0, high=2, size=(size,)) * 2 - 1  # -1 or +1
             offsets = magnitudes * signs * max_length
+            indices = torch.arange(start=0, end=size) + offsets.long()
+            indices = indices % max_length
         else:
-            offsets = r * max_length
-        indices = torch.arange(start=0, end=size) + offsets.long()
-        indices = indices % max_length
+            if LEGACY:
+                offsets = r * max_length
+                indices = torch.arange(start=0, end=size) + offsets.long()
+                indices = indices % max_length
+            else:
+                c       = torch.randperm(outputs) % inputs
+                indices = torch.randperm(inputs)[c]
         self.register_buffer("indices", indices)
-
         self.binarized = False
-
-        # self.batch_indices = indices.unsqueeze(0)
 
     @torch.profiler.record_function("mnist::Fixed::FWD")
     def forward(self, x):

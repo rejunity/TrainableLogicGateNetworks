@@ -467,7 +467,6 @@ class BlockSparseInterconnect(nn.Module):
 # F1000, α=1   ->   acc_bin_train=84.29%        train_acc_diff= 0.93% acc_train=85.22%   acc_bin_TEST=84.40% SCALE_LOGITS="TAU" MANUAL_GAIN=3
 # K1000, K=5   ->   acc_bin_train=89.67%        train_acc_diff= 5.05% acc_train=94.72%   acc_bin_TEST=88.02%
 # K1000, K=25  ->   acc_bin_train=94.22%        train_acc_diff= 3.81% acc_train=98.03%   acc_bin_TEST=92.53%    --- top 25 is not enough for the input layer!
-# L1000        ->   acc_bin_train=97.21% <<<<<  train_acc_diff= 2.36% acc_train=99.56% < acc_bin_TEST=94.66%    --- winner
 # L1000        ->   acc_bin_train=97.21% <<<<<  train_acc_diff= 2.36% acc_train=99.56% < acc_bin_TEST=94.66%    --- winner on BIN
 
 # EPOCHS=30  C_SPARSITY=1 LEARNING_RATE=0.075 SCALE_LOGITS="TAU" MANUAL_GAIN=3 GATE_ARCHITECTURE="[1000]"

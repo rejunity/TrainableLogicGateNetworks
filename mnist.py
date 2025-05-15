@@ -107,6 +107,12 @@ TAU_LR = float(config.get("TAU_LR", 0.03))
 if TAU_LR == 0 and SCALE_LOGITS.startswith("ADATAU"):
     SCALE_LOGITS = "0"
 
+
+TOPK_ANNEALING = float(config.get("TOPK_ANNEALING", -1))
+TOPK_ANNEALING_TAIL_IN_EPOCHS = int(config.get("TOPK_ANNEALING_TAIL_IN_EPOCHS", 3))
+TOPK_ANNEALING_MIN_VALUE = int(config.get("TOPK_ANNEALING_MIN_VALUE", 3))
+TOPK_BIAS = 1/1000
+
 DROPOUT = float(config.get("DROPOUT", 0.0))
 
 LEGACY = config.get("LEGACY", "0").lower() in ("true", "1", "yes")
@@ -122,6 +128,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "MANUAL_GAIN",
                "SCALE_LOGITS", "SCALE_TARGET", "TAU_LR",
                "DROPOUT",
+               "TOPK_ANNEALING", "TOPK_ANNEALING_TAIL_IN_EPOCHS", "TOPK_ANNEALING_MIN_VALUE",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -391,6 +398,16 @@ class SparseInterconnect(nn.Module):
     
     @torch.profiler.record_function("mnist::Sparse::FWD")
     def forward(self, x):
+        if TOPK_ANNEALING > 0:
+            with torch.no_grad():
+                max_topk = self.c.shape[0]
+                new_topk = math.ceil(min(max(0, max_topk - TOPK_ANNEALING_MIN_VALUE) * (TOPK_ANNEALING-TOPK_BIAS) + TOPK_ANNEALING_MIN_VALUE, max_topk))
+                if not hasattr(self, "last_topk") or new_topk < self.last_topk:
+                    self.last_topk = new_topk
+                    with torch.no_grad():
+                        threshold_value = torch.topk(self.c, new_topk, dim=0, largest=True, sorted=False).values[-1]
+                        self.c[self.c < threshold_value] = -float('inf')
+
         connections = F.softmax(self.c * C_SPARSITY, dim=0) if not self.binarized else self.c
         return torch.matmul(x, connections)
 
@@ -545,8 +562,17 @@ class TopKSparseInterconnect(nn.Module):
         if self.binarized:
             return torch.matmul(x, self.c)
 
-        x = x[:, self.top_indices]
-        top_connections = F.softmax(self.top_c * C_SPARSITY, dim=0)
+        if TOPK_ANNEALING > 0:
+            max_topk = self.top_indices.shape[0]
+            new_topk = math.ceil(min(max(0, max_topk - TOPK_ANNEALING_MIN_VALUE) * (TOPK_ANNEALING-TOPK_BIAS) + TOPK_ANNEALING_MIN_VALUE, max_topk))
+            top_indices = self.top_indices[:new_topk, :]
+            top_c       = self.top_c[:new_topk, :]
+        else:
+            top_indices = self.top_indices
+            top_c       = self.top_c
+
+        x = x[:, top_indices]
+        top_connections = F.softmax(top_c * C_SPARSITY, dim=0)
         return (x * top_connections).sum(dim=1)
 
     def binarize(self, bin_value=1):
@@ -1192,6 +1218,11 @@ for i in range(TRAINING_STEPS):
         loss.backward()
         optimizer.step()
 
+    def compute_decay_rate(start_value, end_value, steps):
+        return np.exp(np.log(end_value / start_value) / steps)
+    if TOPK_ANNEALING > 0:
+        TOPK_ANNEALING *= compute_decay_rate(1, TOPK_BIAS, TRAINING_STEPS-(TOPK_ANNEALING_TAIL_IN_EPOCHS*EPOCH_STEPS))
+
     # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:
         passthrough_log = " ".join([f"{value * 100:2.0f}" for value in model.get_passthrough_fraction()])
@@ -1203,6 +1234,8 @@ for i in range(TRAINING_STEPS):
         # self.log_input_norm = torch.norm(X).item()
         # logits_log = f"μ{model.log_pregain_mean:.0f}±{model.log_pregain_std:.1f}*{1.0/model.log_applied_gain:0.3f} v{model.log_pregain_min:.0f}^{model.log_pregain_max:.0f}= μ{model.log_logits_mean:.0f}±{model.log_logits_std:.1f} ‖{model.log_logits_norm:.0f}‖"
         logits_log = f"{model.log_pregain_min:.0f}..{model.log_pregain_max:.0f} μ{model.log_pregain_mean:.0f}±{model.log_pregain_std:.1f}/{model.log_applied_gain:.1f} = ±{model.log_logits_std:.1f} ‖{model.log_logits_norm:.0f}‖"
+        if TOPK_ANNEALING > 0:
+            logits_log += f" top_k: {TOPK_ANNEALING*100:0.1f}%"
         log(f"Iteration {i + 1:10} - Loss {loss:6.3f} - RegLoss {(1-loss_ce/loss)*100:2.0f}% - Pass (%) {passthrough_log} | Conn (%) {unique_log} | e-∇x10 {grad_log} | Logits {logits_log}")
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, 

@@ -1220,8 +1220,8 @@ for i in range(TRAINING_STEPS):
 
     def compute_decay_rate(start_value, end_value, steps):
         return np.exp(np.log(end_value / start_value) / steps)
-    if TOPK_ANNEALING > 0:
-        TOPK_ANNEALING *= compute_decay_rate(1, TOPK_BIAS, TRAINING_STEPS-(TOPK_ANNEALING_TAIL_IN_EPOCHS*EPOCH_STEPS))
+    if TOPK_ANNEALING > 0 and (i + 1) % EPOCH_STEPS == 0: # anneal only once per epoch for speed
+        TOPK_ANNEALING *= compute_decay_rate(1, TOPK_BIAS, EPOCHS-TOPK_ANNEALING_TAIL_IN_EPOCHS)
 
     # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:

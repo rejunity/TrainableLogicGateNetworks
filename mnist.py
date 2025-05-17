@@ -201,9 +201,9 @@ class Dropout01(nn.Module):
             return x
 
         pred = torch.rand_like(x) > self.p
-        mask = pred.float()
         zero_one = (torch.rand_like(x) < 0.5).float()
 
+        # mask = pred.float()
         # return mask * x + (1 - mask) * zero_one
         return torch.where(pred, x, zero_one)
 

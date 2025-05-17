@@ -210,11 +210,14 @@ class Dropout01(nn.Module):
             return x
 
         pred = torch.rand_like(x) > self.p
-        mask = pred.float()
         zero_one = (torch.rand_like(x) < 0.5).float()
 
+        # mask = pred.float()
         # return mask * x + (1 - mask) * zero_one
         return torch.where(pred, x, zero_one)
+
+    def binarize(self, bin_value=1):
+        self.p = 0 # disable dropout after binarization
 
     def __repr__(self):
         return f"Dropout01(p={self.p})"
@@ -231,6 +234,9 @@ class DropoutFlip(nn.Module):
             return x
 
         return torch.where(torch.rand_like(x) > self.p, x, 1-x)
+
+    def binarize(self, bin_value=1):
+        self.p = 0 # disable dropout after binarization
 
     def __repr__(self):
         return f"DropoutFlip(p={self.p})"
@@ -893,9 +899,11 @@ class Model(nn.Module):
     def clone_and_binarize(self, device, bin_value=1):
         model_binarized = Model(self.seed, self.gate_architecture, self.interconnect_architecture, self.number_of_categories, self.input_size).to(device)
         model_binarized.load_state_dict(self.state_dict())
-        for layer in model_binarized.layers:
+        def binarize_if_applicable(layer):
             if hasattr(layer, 'binarize') and callable(layer.binarize):
                 layer.binarize(bin_value)
+        model_binarized.apply(binarize_if_applicable)
+        model_binarized.eval()
         return model_binarized
 
     def get_passthrough_fraction(self):
@@ -1243,6 +1251,7 @@ for i in range(TRAINING_STEPS):
     if (i + 1) % VALIDATE_EVERY == 0 or (i + 1) == TRAINING_STEPS:
         current_epoch = (i+1) // EPOCH_STEPS
 
+        model.eval()
         train_loss, train_acc = validate('train')
         log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS}     TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
         model_binarized = get_binarized_model(model)
@@ -1254,6 +1263,8 @@ for i in range(TRAINING_STEPS):
         test_acc_diff = train_acc-test_acc
         log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS}     TST            acc={test_acc*100:.2f}%, test_acc_diff= {test_acc_diff*100:.2f}%, loss={test_loss:.3f}")
         
+        model.train()
+
         top1w = torch.tensor(0., device=device)
         top2w = torch.tensor(0., device=device)
         top4w = torch.tensor(0., device=device)
@@ -1322,6 +1333,7 @@ time_end = time.time()
 training_total_time = time_end - time_start 
 log(f"Training took {training_total_time:.2f} seconds, per iteration: {(training_total_time) / TRAINING_STEPS * 1000:.2f} milliseconds")
 
+model.eval()
 test_loss, test_acc = validate('test')
 log(f"    TEST loss={test_loss:.3f} acc={test_acc*100:.2f}%")
 

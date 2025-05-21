@@ -827,11 +827,11 @@ class Model(nn.Module):
                                             # SCALE_TARGET=1   TAU_LR=.01              ->   97.62/96.32% LLLLx1000 (50 epochs)
             std = torch.std(X).item()
             t = std / (4.0 * SCALE_TARGET)
-            if self.adatau < 0.1:
-                self.adatau = np.sqrt(self.outputs_per_category)
+            if self.adatau < 0.1:                                # TODO: better check against div-by-zero / epsilon 
+                self.adatau = np.sqrt(self.outputs_per_category) # TODO: make it more clear that this is an initialisation
             else:
                 self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
-            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            self.adatau = min(self.adatau, self.outputs_per_category / 6) # TODO: sqrt(self.outputs_per_category) would make more sense than /6
             X = X / self.adatau
             self.log_applied_gain = self.adatau
         elif SCALE_LOGITS == "ADAVAR_TANH": # SCALE_TARGET=1 TAU_LR=.01               ->    98.71/97.44% Lx8000 (20epochs)

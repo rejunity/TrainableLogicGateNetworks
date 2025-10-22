@@ -46,7 +46,7 @@ WANDB_KEY = config.get("WANDB_KEY")
 WANDB_PROJECT = config.get("WANDB_PROJECT", "mnist_project")
 
 BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", 0.75))
-IMG_WIDTH = int(config.get("IMG_WIDTH", 16))
+IMG_WIDTH = int(config.get("IMG_WIDTH", 28)) # previous 16 which was suitable for Tiny Tapeout
 INPUT_SIZE = IMG_WIDTH * IMG_WIDTH
 DATA_SPLIT_SEED = int(config.get("DATA_SPLIT_SEED", 42))
 TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.9))
@@ -55,8 +55,8 @@ ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true
 
 SEED = config.get("SEED", random.randint(0, 1024*1024))
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[2250, 2250, 2250]")) # previous: "[1300,1300,1300]")) resnet95: [2000, 2000]
-INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[]")) # previous: "[[32, 325], [26, 52], [26, 52]]"))
+GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000,8000,8000, 8000,8000,8000]")) # previous: "[1300,1300,1300]")) resnet95: [2000, 2000] conn_gain96: "[2250, 2250, 2250]"
+INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[],[-1],[-1], [-1],[-1],[-1]]")) # previous: "[[32, 325], [26, 52], [26, 52]]")) resnet95, conn_gain96: []
 if not INTERCONNECT_ARCHITECTURE or INTERCONNECT_ARCHITECTURE == []:
     INTERCONNECT_ARCHITECTURE = [[] for g in GATE_ARCHITECTURE]
 assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
@@ -68,7 +68,7 @@ TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS * 5)) # previous EPOCH_STEPS // 4, changed to reduce the frequency of connectivy_gain updates
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
 
-LEARNING_RATE = float(config.get("LEARNING_RATE", 0.03)) # previous: 0.01
+LEARNING_RATE = float(config.get("LEARNING_RATE", 0.01)) # conn_gain96: 0.03
 
 TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
@@ -87,7 +87,7 @@ COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
 C_INIT_PARAM = float(config.get("C_INIT_PARAM", -1.0))
-C_SPARSITY = float(config.get("C_SPARSITY", 5.0)) # previous: 5
+C_SPARSITY = float(config.get("C_SPARSITY", 3.0)) # previous: 5
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 
 PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "0").lower() in ("true", "1", "yes") # previous: 1
@@ -172,6 +172,65 @@ def binarize_inplace(x, dim=-1, bin_value=1):
     x.data.scatter_(dim=dim, index=ones_at.unsqueeze(dim), value=bin_value)
 
 ############################ MODEL ########################
+class FixedPowerLawInterconnect(nn.Module):
+    def __init__(self, inputs, outputs, alpha, x_min=1.0, name=''):
+        super(FixedPowerLawInterconnect, self).__init__()
+        self.inputs = inputs
+        self.outputs = outputs
+        self.alpha = alpha
+
+        max_length = inputs
+        size = outputs
+        r = torch.rand(size)
+        if alpha > 1:
+            magnitudes = x_min * (1 - r) ** (-1 / (alpha - 1))          # Power law distribution
+            signs = torch.randint(low=0, high=2, size=(size,)) * 2 - 1  # -1 or +1
+            offsets = magnitudes * signs * max_length
+        else:
+            offsets = r * max_length
+        indices = torch.arange(start=0, end=size) + offsets.long()
+        indices = indices % max_length
+        self.register_buffer("indices", indices)
+
+        self.binarized = False
+
+        # self.batch_indices = indices.unsqueeze(0)
+
+    @torch.profiler.record_function("mnist::Fixed::FWD")
+    def forward(self, x):
+        return x[:, self.indices] if not self.binarized else torch.matmul(x, self.c)
+
+        # Performance comparison
+        # 1) x[:, self.indices]
+        # MPS: 4.29 ms per iteration [300,300], tiny bit faster
+        # MPS: 9.93 ms per iteration [3000,3000]
+        # Takes significantly less memory though!
+
+        # 2)
+        # batch_size = x.shape[0]
+        # if self.batch_indices.shape[0] != batch_size:
+        #     self.batch_indices = self.indices.repeat(batch_size, 1)
+        # return torch.gather(x, dim=1, index=self.batch_indices) 
+        # MPS: 4.57 ms per iteration [300,300]
+        # MPS: 9.32 ms per iteration [3000,3000], tiny bit faster
+
+    def binarize(self, bin_value=1):
+        with torch.no_grad():
+            self.c = torch.zeros((self.inputs, self.outputs), dtype=torch.float32, device=device)
+            self.c.scatter_(dim=0, index=self.indices.unsqueeze(0), value=bin_value)
+            self.binarized = True
+
+    def __repr__(self):
+        with torch.no_grad():
+            i = self.indices.view(self.outputs // 2, 2) # [batch_size, number_of_gates, 2]
+            A = i[:,0]
+            B = i[:,1]
+
+            d = torch.abs(A-B)
+            d = torch.minimum(d, self.inputs - d)
+            # d[d >= self.inputs] = self.inputs - d
+            return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha}, mean={d.float().mean().long()} median={d.float().median().long()})"
+
 class SparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, name=''):
         super(SparseInterconnect, self).__init__()
@@ -405,8 +464,10 @@ class Model(nn.Module):
         layer_inputs = input_size
         R = [input_size]
         for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
-            if   len(interconnect_params) == 1:
+            if   len(interconnect_params) == 1 and interconnect_params[0] > 0:
                 interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],  name=f"i_{layer_idx}")
+            elif len(interconnect_params) == 1 and interconnect_params[0] < 0:
+                interconnect = FixedPowerLawInterconnect    (layer_inputs, layer_gates*2, alpha=      -interconnect_params[0],  name=f"i_{layer_idx}")
             else:
                 interconnect = SparseInterconnect           (layer_inputs, layer_gates*2,                                       name=f"i_{layer_idx}")
             layers_.append(interconnect)

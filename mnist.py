@@ -12,7 +12,7 @@
 # [tool.uv]
 # exclude-newer = "2024-02-20T00:00:00Z"
 # ///
-# pip install wandb python-dotenv python-telegram-bot asyncio
+# pip install wandb python-dotenv python-telegram-bot asyncio && apt install -y gcc
 
 import random
 import torch
@@ -778,6 +778,14 @@ log(f"    TEST loss={test_loss:.3f} acc={test_acc*100:.2f}%")
 model_binarized = get_binarized_model(model)
 bin_test_loss, bin_test_acc = validate(dataset="test", model=model_binarized)
 log(f"BIN TEST loss={bin_test_loss:.3f} acc={bin_test_acc*100:.2f}%")
+
+# Hacky way to append dataset
+# with torch.no_grad():
+#     X = val_images
+#     for layer_idx in range(0, len(model_binarized.layers)):
+#         X = model_binarized.layers[layer_idx](X)
+#     model.dataset_input = val_images
+#     model.dataset_output = X
 
 model_filename = (
     f"{datetime.now(ZoneInfo(TIMEZONE)).strftime('%Y%m%d-%H%M%S')}"

@@ -14,6 +14,7 @@
 # ///
 # pip install wandb python-dotenv python-telegram-bot asyncio && apt install -y gcc
 
+import math
 import random
 import torch
 import torch.nn as nn
@@ -51,24 +52,24 @@ BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", 0.75))
 IMG_WIDTH = int(config.get("IMG_WIDTH", 28)) # previous 16 which was suitable for Tiny Tapeout
 INPUT_SIZE = IMG_WIDTH * IMG_WIDTH
 DATA_SPLIT_SEED = int(config.get("DATA_SPLIT_SEED", 42))
-TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.9))
+TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.99)) # previous 0.9, NOTE: since we are not using VALIDATION subset in VALIDATION pass, we can boost accuracy a bit by training on the whole dataset
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
 ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true", "1", "yes")
 
 SEED = config.get("SEED", random.randint(0, 1024*1024))
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000]")) # previous: [1300,1300,1300] resnet95: [2000, 2000] conn_gain96: [2250, 2250, 2250] power_law_fixed97: [8000,8000,8000, 8000,8000,8000]
-INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[]")) # previous: [[32, 325], [26, 52], [26, 52]])) resnet95, conn_gain96: [] power_law_fixed97: [[],[-1],[-1], [-1],[-1],[-1]]
+GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000,8000]")) # previous: [1300,1300,1300] resnet95: [2000, 2000] conn_gain96: [2250, 2250, 2250] power_law_fixed97: [8000,8000,8000, 8000,8000,8000] auto_scale_logits_97_5 [8000]
+INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[],['k',5]]")) # previous: [[32, 325], [26, 52], [26, 52]])) resnet95, conn_gain96, auto_scale_logits_97_5: [] power_law_fixed97: [[],[-1],[-1], [-1],[-1],[-1]] p
 if not INTERCONNECT_ARCHITECTURE or INTERCONNECT_ARCHITECTURE == []:
     INTERCONNECT_ARCHITECTURE = [[] for g in GATE_ARCHITECTURE]
 assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
 EPOCHS = int(config.get("EPOCHS", 30)) # previous: 50
-EPOCH_STEPS = round(54_000 / BATCH_SIZE) # 54K train /6K val/10K test
+EPOCH_STEPS = math.floor((60_000 * TRAIN_FRACTION) / BATCH_SIZE) # MNIST consists of 60K images
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
-PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS * 5)) # previous EPOCH_STEPS // 4, changed to reduce the frequency of connectivy_gain updates
-VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
+PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS))
+VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS * 5))
 
 LEARNING_RATE = float(config.get("LEARNING_RATE", 0.075)) # conn_gain96, power_law_fixed_conn97: 0.03
 
@@ -102,7 +103,7 @@ SCALE_LOGITS = config.get("SCALE_LOGITS", "ADAVAR") # TANH, ARCSINH, BN, MINMAX,
 SCALE_TARGET = float(config.get("SCALE_TARGET", 1.5)) # NOTE: 1.5 works well only for SHALLOW nets, 1.0 is better for deeper networks combined with C_SPARCITY=3
 if SCALE_TARGET == 0:
     SCALE_LOGITS = "0"
-TAU_LR = float(config.get("TAU_LR", 0.001))
+TAU_LR = float(config.get("TAU_LR", 0.03))
 if TAU_LR == 0 and SCALE_LOGITS.startswith("ADATAU"):
     SCALE_LOGITS = "0"
 
@@ -303,7 +304,6 @@ class SparseInterconnect(nn.Module):
     
     @torch.profiler.record_function("mnist::Sparse::FWD")
     def forward(self, x):
-        batch_size = x.shape[0]
         connections = F.softmax(self.c * C_SPARSITY, dim=0) if not self.binarized else self.c
         return torch.matmul(x, connections)
 
@@ -373,7 +373,73 @@ class BlockSparseInterconnect(nn.Module):
         fc_params = self.layer_inputs * self.layer_outputs
         params  = self.n_blocks_in_sub_layer_1 * self.inputs_per_block_in_sub_layer_1 * self.outputs_per_block_in_sub_layer_1 + \
                   self.n_blocks_in_sub_layer_2 * self.inputs_per_block_in_sub_layer_2 * self.outputs_per_block_in_sub_layer_2
-        return f"BlockSparseInterconnect({self.layer_inputs} -> {self.layer_outputs // 2}x2 @ {(params * 100 / fc_params):.1f}%)"
+        percent = params * 100 / fc_params
+        return f"BlockSparseInterconnect({self.layer_inputs} -> {self.layer_outputs // 2}x2 @ {percent:.1f}%)"
+
+# EPOCHS=30  C_SPARSITY=1 LEARNING_RATE=0.075 TAU_LR=.03 SCALE_TARGET=1.5 SCALE_LOGITS="ADAVAR" MANUAL_GAIN=1 GATE_ARCHITECTURE="[1000]"
+# F1000, α=1   ->   acc_bin_train=84.29%        train_acc_diff= 0.93% acc_train=85.22%   acc_bin_TEST=84.40% SCALE_LOGITS="TAU" MANUAL_GAIN=3
+# K1000, K=5   ->   acc_bin_train=89.67%        train_acc_diff= 5.05% acc_train=94.72%   acc_bin_TEST=88.02%
+# K1000, K=25  ->   acc_bin_train=94.22%        train_acc_diff= 3.81% acc_train=98.03%   acc_bin_TEST=92.53%    --- top 25 is not enough for the input layer!
+# L1000        ->   acc_bin_train=97.21% <<<<<  train_acc_diff= 2.36% acc_train=99.56% < acc_bin_TEST=94.66%    --- winner
+# L1000        ->   acc_bin_train=97.21% <<<<<  train_acc_diff= 2.36% acc_train=99.56% < acc_bin_TEST=94.66%    --- winner on BIN
+
+# EPOCHS=30  C_SPARSITY=1 LEARNING_RATE=0.075 SCALE_LOGITS="TAU" MANUAL_GAIN=3 GATE_ARCHITECTURE="[1000]"
+# F1000, α=1   ->   acc_bin_train=84.29%        train_acc_diff= 0.93% acc_train=85.22%   acc_bin_TEST=84.40% 
+# K1000, K=5   ->   acc_bin_train=92.46%        train_acc_diff= 0.54% acc_train=93.01%   acc_bin_TEST=92.18%
+# K1000, K=16  ->   acc_bin_train=95.06%        train_acc_diff= 0.57% acc_train=95.64%   acc_bin_TEST=94.23%
+# K1000, K=25  ->   acc_bin_train=95.81%        train_acc_diff= 0.44% acc_train=96.25%   acc_bin_TEST=95.15%
+# K1000, K=32  ->   acc_bin_train=96.02%        train_acc_diff= 0.56% acc_train=96.59%   acc_bin_TEST=95.49%
+# B980,  B=28  ->   acc_bin_train=95.13%        train_acc_diff= 1.83% acc_train=96.96%   acc_bin_TEST=94.48%
+# B980,  B=16  ->   acc_bin_train=95.54%        train_acc_diff= 1.23% acc_train=96.77%   acc_bin_TEST=94.45%
+# B980,  B=16  ->   acc_bin_train=95.74%        train_acc_diff= 1.26% acc_train=97.00%   acc_bin_TEST=94.65%
+# L1000        ->   acc_bin_train=97.33% <<<<<  train_acc_diff= 0.40% acc_train=97.73% < acc_bin_TEST=96.16%    --- winner
+# L1000        ->   acc_bin_train=97.60% <<<<<  train_acc_diff= 0.65% acc_train=98.26% < acc_bin_TEST=96.13%    --- winner [MANUAL_GAIN=2.5]
+# FFFF1000_1160_1350_1580, α=1
+#              ->   acc_bin_train=95.84%        train_acc_diff= 0.72% acc_train=96.56%   acc_bin_TEST=94.86%
+# FFFFF1000_1160_1350_1580_1830, α=1
+#              ->   acc_bin_train=96.83%        train_acc_diff= 0.45% acc_train=97.28%   acc_bin_TEST=95.09%
+
+# EPOCHS=30  C_SPARSITY=1 LEARNING_RATE=0.075 SCALE_LOGITS="TAU" MANUAL_GAIN=3 GATE_ARCHITECTURE="[1000,1000]"
+# LL1000       ->   acc_bin_train=96.77%        train_acc_diff= 1.80% acc_train=98.57% < acc_bin_TEST=96.82%
+
+
+# TODO: try PyTorch COO sparse tensor functionality and compare the speed
+class TopKSparseInterconnect(nn.Module):
+    def __init__(self, inputs, outputs, topk, name=''):
+        super(TopKSparseInterconnect, self).__init__()
+        with torch.no_grad():
+            cc = torch.normal(mean=0.0, std=1, size=(inputs, outputs))
+            top_indices = torch.zeros((topk, outputs), dtype=torch.long)
+        self.top_c = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.float32))
+        with torch.no_grad():
+            torch.topk(cc, topk, dim=0, largest=True, sorted=False, out=(self.top_c, top_indices))
+        self.register_buffer("top_indices", top_indices)
+        self.inputs = inputs
+        self.name = name
+        self.binarized = False
+    
+    @torch.profiler.record_function("mnist::TopKSparse::FWD")
+    def forward(self, x):
+        if self.binarized:
+            return torch.matmul(x, self.c)
+
+        x = x[:, self.top_indices]
+        top_connections = F.softmax(self.top_c * C_SPARSITY, dim=0)
+        return (x * top_connections).sum(dim=1)
+
+    def binarize(self, bin_value=1):
+        with torch.no_grad():
+            outputs = self.top_c.shape[1]
+            top1 = torch.argmax(self.top_c, dim=0)
+            write_indices = self.top_indices[top1, torch.arange(outputs)]
+            c = torch.zeros((self.inputs, outputs), dtype=torch.float32, device=device)
+            c.scatter_(dim=0, index=write_indices.unsqueeze(0), value=bin_value)
+            self.register_buffer("c", c)
+            self.binarized = True
+
+    def __repr__(self):
+        percent = self.top_c.shape[0] * 100 / self.inputs
+        return f"TopKSparseInterconnect({self.inputs} -> {self.top_c.shape[1] // 2}x2 @ {percent:.2f}%)"
 
 class LearnableGate16Array(nn.Module):
     def __init__(self, number_of_gates, name=''):
@@ -481,7 +547,9 @@ class Model(nn.Module):
         layer_inputs = input_size
         R = [input_size]
         for layer_idx, (layer_gates, interconnect_params) in enumerate(zip(gate_architecture, interconnect_architecture)):
-            if   len(interconnect_params) == 1 and interconnect_params[0] > 0:
+            if   len(interconnect_params) == 2 and (interconnect_params[0] == "k" or interconnect_params[0] == "top_k"):
+                interconnect = TopKSparseInterconnect       (layer_inputs, layer_gates*2, topk=        interconnect_params[1],  name=f"i_{layer_idx}")
+            elif len(interconnect_params) == 1 and interconnect_params[0] > 0:
                 interconnect = BlockSparseInterconnect      (layer_inputs, layer_gates*2, granularity= interconnect_params[0],  name=f"i_{layer_idx}")
             elif len(interconnect_params) == 1 and interconnect_params[0] < 0:
                 interconnect = FixedPowerLawInterconnect    (layer_inputs, layer_gates*2, alpha=      -interconnect_params[0],  name=f"i_{layer_idx}")

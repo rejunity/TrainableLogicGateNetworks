@@ -37,6 +37,8 @@ from dotenv import dotenv_values
 config = { **dotenv_values(".env"), **os.environ }
 
 # PASS_INPUT_TO_ALL_LAYERS=1 C_INIT="XAVIER_U" C_SPARSITY=10 G_SPARSITY=1 OPT_GATE16_CODEPATH=3 KINETO_LOG_LEVEL=99 GATE_ARCHITECTURE="[2000,2000]" INTERCONNECT_ARCHITECTURE="[]" PRINTOUT_EVERY=211 EPOCHS=300 uv run mnist.py
+# CONNECTIVITY_GAIN=1 LEARNING_RATE=0.001 PASS_RESIDUAL=0 PASS_INPUT_TO_ALL_LAYERS=0 C_INIT="NORMAL" C_SPARSITY=100 C_INIT_PARAM=0 GATE_ARCHITECTURE="[250,250,250,250,250,250]"PRINTOUT_EVERY=55 VALIDATE_EVERY=211 EPOCHS=200 uv run mnist.py
+# LEARNING_RATE=0.075 C_SPARSITY=1 NO_SOFTMAX=1 SCALE_TARGET=1.5 SCALE_LOGITS="ADAVAR" TAU_LR=.03 MANUAL_GAIN=1 PASS_RESIDUAL=0 PASS_INPUT_TO_ALL_LAYERS=0 KINETO_LOG_LEVEL=99 GATE_ARCHITECTURE="[8000]" INTERCONNECT_ARCHITECTURE="[]" PRINTOUT_EVERY=211 VALIDATE_EVERY=1055 IMG_WIDTH=28 EPOCHS=30 uv run mnist.py
 
 LOG_TAG = config.get("LOG_TAG", "MNIST")
 TIMEZONE = config.get("TIMEZONE", "UTC")
@@ -55,20 +57,20 @@ ONLY_USE_DATA_SUBSET = config.get("ONLY_USE_DATA_SUBSET", "0").lower() in ("true
 
 SEED = config.get("SEED", random.randint(0, 1024*1024))
 LOG_NAME = f"{LOG_TAG}_{SEED}"
-GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000,8000,8000, 8000,8000,8000]")) # previous: "[1300,1300,1300]")) resnet95: [2000, 2000] conn_gain96: "[2250, 2250, 2250]"
-INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[[],[-1],[-1], [-1],[-1],[-1]]")) # previous: "[[32, 325], [26, 52], [26, 52]]")) resnet95, conn_gain96: []
+GATE_ARCHITECTURE = ast.literal_eval(config.get("GATE_ARCHITECTURE", "[8000]")) # previous: [1300,1300,1300] resnet95: [2000, 2000] conn_gain96: [2250, 2250, 2250] power_law_fixed97: [8000,8000,8000, 8000,8000,8000]
+INTERCONNECT_ARCHITECTURE = ast.literal_eval(config.get("INTERCONNECT_ARCHITECTURE", "[]")) # previous: [[32, 325], [26, 52], [26, 52]])) resnet95, conn_gain96: [] power_law_fixed97: [[],[-1],[-1], [-1],[-1],[-1]]
 if not INTERCONNECT_ARCHITECTURE or INTERCONNECT_ARCHITECTURE == []:
     INTERCONNECT_ARCHITECTURE = [[] for g in GATE_ARCHITECTURE]
 assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
-EPOCHS = int(config.get("EPOCHS", 200)) # previous: 50
+EPOCHS = int(config.get("EPOCHS", 30)) # previous: 50
 EPOCH_STEPS = round(54_000 / BATCH_SIZE) # 54K train /6K val/10K test
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS * 5)) # previous EPOCH_STEPS // 4, changed to reduce the frequency of connectivy_gain updates
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS))
 
-LEARNING_RATE = float(config.get("LEARNING_RATE", 0.01)) # conn_gain96: 0.03
+LEARNING_RATE = float(config.get("LEARNING_RATE", 0.075)) # conn_gain96, power_law_fixed_conn97: 0.03
 
 TG_TOKEN = config.get("TG_TOKEN")
 TG_CHATID = config.get("TG_CHATID")
@@ -85,15 +87,24 @@ FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
 C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
-G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM
+G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM, PASSTHROUGH, XOR
 C_INIT_PARAM = float(config.get("C_INIT_PARAM", -1.0))
-C_SPARSITY = float(config.get("C_SPARSITY", 3.0)) # previous: 5
+C_SPARSITY = float(config.get("C_SPARSITY", 1.0)) # NOTE: 1.0 works well only for SHALLOW nets, 3.0 for deeper is necessary to binarize well
 G_SPARSITY = float(config.get("G_SPARSITY", 1.0))
 
 PASS_INPUT_TO_ALL_LAYERS = config.get("PASS_INPUT_TO_ALL_LAYERS", "0").lower() in ("true", "1", "yes") # previous: 1
 PASS_RESIDUAL = config.get("PASS_RESIDUAL", "0").lower() in ("true", "1", "yes")
 
-CONNECTIVITY_GAIN = config.get("CONNECTIVITY_GAIN", "1").lower() in ("true", "1", "yes")
+MANUAL_GAIN = float(config.get("MANUAL_GAIN", 1.0))
+
+NO_SOFTMAX = config.get("NO_SOFTMAX", "1").lower() in ("true", "1", "yes") # previous: 0
+SCALE_LOGITS = config.get("SCALE_LOGITS", "ADAVAR") # TANH, ARCSINH, BN, MINMAX, ADATAU, ADAVAR, AUTOAU, ADAVAR_ASH, AUTOAU_ASH
+SCALE_TARGET = float(config.get("SCALE_TARGET", 1.5)) # NOTE: 1.5 works well only for SHALLOW nets, 1.0 is better for deeper networks combined with C_SPARCITY=3
+if SCALE_TARGET == 0:
+    SCALE_LOGITS = "0"
+TAU_LR = float(config.get("TAU_LR", 0.001))
+if TAU_LR == 0 and SCALE_LOGITS.startswith("ADATAU"):
+    SCALE_LOGITS = "0"
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
@@ -102,7 +113,9 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "LEARNING_RATE",
                "C_INIT", "C_INIT_PARAM", "G_INIT", "C_SPARSITY", "G_SPARSITY",
                "PASS_INPUT_TO_ALL_LAYERS", "PASS_RESIDUAL",
-               "CONNECTIVITY_GAIN",
+               "NO_SOFTMAX",
+               "MANUAL_GAIN",
+               "SCALE_LOGITS", "SCALE_TARGET", "TAU_LR",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -216,8 +229,9 @@ class FixedPowerLawInterconnect(nn.Module):
 
     def binarize(self, bin_value=1):
         with torch.no_grad():
-            self.c = torch.zeros((self.inputs, self.outputs), dtype=torch.float32, device=device)
-            self.c.scatter_(dim=0, index=self.indices.unsqueeze(0), value=bin_value)
+            c = torch.zeros((self.inputs, self.outputs), dtype=torch.float32, device=device)
+            c.scatter_(dim=0, index=self.indices.unsqueeze(0), value=bin_value)
+            self.register_buffer("c", c)
             self.binarized = True
 
     def __repr__(self):
@@ -228,7 +242,6 @@ class FixedPowerLawInterconnect(nn.Module):
 
             d = torch.abs(A-B)
             d = torch.minimum(d, self.inputs - d)
-            # d[d >= self.inputs] = self.inputs - d
             return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha}, mean={d.float().mean().long()} median={d.float().median().long()})"
 
 class SparseInterconnect(nn.Module):
@@ -375,6 +388,10 @@ class LearnableGate16Array(nn.Module):
         nn.init.normal_(self.w, mean=0, std=1)
         if G_INIT == "UNIFORM":
             nn.init.uniform_(self.w, a=0.0, b=1.0)
+        elif G_INIT == "PASS" or G_INIT == "PASSTHROUGH":
+            with torch.no_grad(): self.w[3, :] = 5 # 5 will roughly result in a 95% percent once softmax() applied
+        elif G_INIT == "XOR":
+            with torch.no_grad(): self.w[6, :] = 5 # 5 will roughly result in a 95% percent once softmax() applied
         else:
             nn.init.normal_(self.w, mean=0.0, std=1)
 
@@ -455,7 +472,7 @@ class Model(nn.Module):
         self.number_of_categories = number_of_categories
         self.input_size = input_size
         self.seed = seed
-        self.connectivity_gain = 0.65 ** len(gate_architecture)
+        self.adatau = 0
         
         self.outputs_per_category = self.last_layer_gates // self.number_of_categories
         assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
@@ -482,6 +499,11 @@ class Model(nn.Module):
 
     @torch.profiler.record_function("mnist::Model::FWD")
     def forward(self, X):
+        with torch.no_grad():
+            S = torch.sum(X, dim=-1)
+            self.log_input_mean = torch.mean(S).item()
+            self.log_input_std = torch.std(S).item()
+            self.log_input_norm = torch.norm(S).item()
         I = X
         R = [I]
         for layer_idx in range(0, len(self.layers)):
@@ -495,11 +517,151 @@ class Model(nn.Module):
                 if PASS_RESIDUAL and (layer_idx > 1 or not PASS_INPUT_TO_ALL_LAYERS) and layer_idx < len(self.layers)-2:
                     X = torch.cat([X, R[-2]], dim=-1)
 
-        gain = self.last_layer_gates / self.input_size
-        if CONNECTIVITY_GAIN:
-            gain *= self.connectivity_gain
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
-        X = F.softmax(X / gain, dim=-1)
+        if not self.training:   # INFERENCE ends here! Everything past this line will only concern training
+            return X            # Finishing inference here is both:
+                                # 1) an OPTIMISATION and
+                                # 2) it ensures no discrepancy between VALIDATION step during training vs STANDALONE inference
+
+        gain = MANUAL_GAIN
+        with torch.no_grad():
+            self.log_applied_gain = gain
+            self.log_pregain_mean = torch.mean(X).item()
+            self.log_pregain_std = torch.std(X).item()
+            self.log_pregain_min = torch.min(X).item()
+            self.log_pregain_max = torch.max(X).item()
+            self.log_pregain_norm = torch.norm(X).item()
+        X = X / gain
+
+        if SCALE_LOGITS == "TANH":
+            mu = torch.mean(X, dim=0)
+            X = SCALE_TARGET * torch.tanh((X - mu)/SCALE_TARGET)
+        elif SCALE_LOGITS == "ARCSINH":
+            mu = torch.mean(X, dim=0)
+            k = 2
+            X = SCALE_TARGET * torch.arcsinh((X - mu)/SCALE_TARGET*k) / np.arcsinh(k)
+        elif SCALE_LOGITS == "MINMAX":
+            rng = torch.max(X).item() - torch.min(X).item()
+            f = self.outputs_per_category / rng
+            X = X / f / SCALE_TARGET
+            self.log_applied_gain = f * SCALE_TARGET
+        elif SCALE_LOGITS == "ADATAU": # TAU_LR=0.001 SCALE_TARGET 0.75 -> 96.6 LLLLx1000
+            rng = torch.max(X).item() - torch.min(X).item()
+            t = rng / self.outputs_per_category
+            if self.adatau < 0.1:
+                self.adatau = 1 / t
+            elif t < SCALE_TARGET:
+                self.adatau *= 1.0+TAU_LR
+            else:
+                self.adatau *= 1.0-TAU_LR*100 # faster falloff
+            self.adatau = min(self.adatau, 100)
+            X = X / self.adatau
+            self.log_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADATAU2":
+            rng = torch.max(X).item() - torch.min(X).item()
+            t = rng / self.outputs_per_category
+            if self.adatau < 0.1:
+                self.adatau = 1 / t
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + (1 / t) * TAU_LR
+            self.adatau = min(self.adatau, 100)
+            X = X / self.adatau
+            self.log_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADATAU4": # SCALE_TARGET=.7 TAU_LR=.001
+            rng = torch.max(X).item() - torch.min(X).item()
+            t = rng / self.outputs_per_category
+            self.adatau += (SCALE_TARGET-t)*TAU_LR
+            self.adatau = max(self.adatau, .1)
+            self.adatau = min(self.adatau, 100)
+            X = X / self.adatau
+            self.log_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADAVAR0":
+            # std = torch.std(X, dim=0)
+            std = torch.std(X).item()
+            t = std / (4.0 * SCALE_TARGET)
+            if self.adatau < 0.1:
+                self.adatau = t
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
+            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            X = X / self.adatau
+            self.log_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADAVAR":      # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.96/97.57% Lx8000 (30epochs)
+                                            # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.99/97.73% LFFx8000 (30epochs)
+                                            # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.86/96.79% LFFFFFx8000 (30epochs)
+                                            # SCALE_TARGET=1   TAU_LR=.03 C_SPARSITY=1 ->   99.91/97.47% LFFFFFx8000 (30epochs)
+                                            # SCALE_TARGET=1.5 TAU_LR=.03 C_SPARSITY=1 ->   99.48/96.73% Lx2000 (30epochs)
+                                            # SCALE_TARGET=1   TAU_LR=.03 C_SPARSITY=1 ->   98.63/97.04% Lx2000 (30epochs)
+                                            # SCALE_TARGET=1   TAU_LR=.01              ->   97.62/96.32% LLLLx1000 (50 epochs)
+            std = torch.std(X).item()
+            t = std / (4.0 * SCALE_TARGET)
+            if self.adatau < 0.1:
+                self.adatau = np.sqrt(self.outputs_per_category)
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
+            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            X = X / self.adatau
+            self.log_applied_gain = self.adatau
+        elif SCALE_LOGITS == "ADAVAR_TANH": # SCALE_TARGET=1 TAU_LR=.01               ->    98.71/97.44% Lx8000 (20epochs)
+            std = torch.std(X).item()
+            t = std / (4.0 * SCALE_TARGET)
+            if self.adatau < 0.1:
+                self.adatau = np.sqrt(self.outputs_per_category)
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
+            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            X = X / self.adatau
+            self.log_applied_gain = self.adatau
+            mu = torch.mean(X, dim=0)
+            std = torch.std(X).item()
+            X = (3.0 * std) * torch.tanh((X - mu)/(3.0 * std))
+        elif SCALE_LOGITS == "ADAVAR_ARCSINH" or \
+             SCALE_LOGITS == "ADAVAR_ASH":  # SCALE_TARGET=1 TAU_LR=.01 ->                  99.53/97.58% Lx8000 (20epochs)
+                                            #                                               98.09/96.28% LLLLx1000 (50 epochs)
+                                            #                                               98.72/96.56% LLLx1000+Lx8000 (20 epochs)
+            std = torch.std(X).item()
+            t = std / (4.0 * SCALE_TARGET)
+            if self.adatau < 0.1:
+                self.adatau = np.sqrt(self.outputs_per_category)
+            else:
+                self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
+            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            X = X / self.adatau
+            self.log_applied_gain = self.adatau
+            k = 2
+            mu = torch.mean(X, dim=0)
+            std = torch.std(X).item()
+            X = (2.0 * std) * torch.arcsinh((X - mu)/(2.0 * std)*k) / np.arcsinh(k)
+        elif SCALE_LOGITS == "AUTOTAU":
+            tau = np.sqrt(self.outputs_per_category / (4.0 * SCALE_TARGET))
+            X = X / tau
+            self.log_applied_gain = tau
+        elif SCALE_LOGITS == "AUTOTAU_TANH":
+            tau = np.sqrt(self.outputs_per_category / (6.0 * SCALE_TARGET))
+            X = X / tau
+            self.log_applied_gain = tau
+            mu = torch.mean(X, dim=0)
+            X = tau * torch.tanh((X - mu)/tau)
+        elif SCALE_LOGITS == "AUTOTAU_ARCSINH" or \
+             SCALE_LOGITS == "AUTOTAU_ASH":         # SCALE_TARGET=1 TAU_LR=.01 ->          ??.??/(?)97.55% Lx8000 (20epochs)
+                                                    #                                       ??.??/(?)95.93% LLLLx1000 (50 epochs)
+            tau = np.sqrt(self.outputs_per_category / (6.0 * SCALE_TARGET))
+            X = X / tau
+            self.log_applied_gain = tau
+            k = 2
+            mu = torch.mean(X, dim=0)
+            std = torch.std(X).item()
+            X = (2.0 * std) * torch.arcsinh((X - mu)/(2.0 * std)*k) / np.arcsinh(k)
+            # X = tau * torch.arcsinh((X - mu)/tau*k) / np.arcsinh(k)
+
+
+        with torch.no_grad():
+            self.log_logits_mean = torch.mean(X).item()
+            self.log_logits_std = torch.std(X).item()
+            self.log_logits_norm = torch.norm(X).item()
+
+        if not NO_SOFTMAX:
+            X = F.softmax(X, dim=-1)
         return X
 
     def clone_and_binarize(self, device, bin_value=1):
@@ -524,6 +686,8 @@ class Model(nn.Module):
     def get_unique_fraction(self):
         unique_fraction_array = []
         for model_layer in self.layers:
+            # TODO: better to measure only unique indices that point to the previous layer and ignore skip connections:
+            # ... = sum(unique_indices < previous_layer.c.shape[1])
             if hasattr(model_layer, 'c'):
                 c = model_layer.c.view(model_layer.c.shape[0], -1, 2)
                 A = c[:,:,0]
@@ -534,7 +698,10 @@ class Model(nn.Module):
                 unique_indices = (unique_indices_a + unique_indices_b) * 0.5
                 min_dimension = min(model_layer.c.shape[0], model_layer.c.shape[1] // 2)
                 unique_fraction_array.append(unique_indices / min_dimension)
-        self.connectivity_gain = np.prod(unique_fraction_array)
+            elif hasattr(model_layer, 'indices'):
+                max_inputs = model_layer.indices.max().item() # approximation
+                unique_indices = torch.unique(model_layer.indices).numel()
+                unique_fraction_array.append(unique_indices / max_inputs)
         return unique_fraction_array
 
     def compute_selected_gates_fraction(self, selected_gates):
@@ -563,34 +730,92 @@ log(f"model={model}")
 ############################ DATA ########################
 
 ### GENERATORS
-def binarize_image_with_histogram(image, verbose=False):
-    threshold = torch.quantile(image, BINARIZE_IMAGE_TRESHOLD)
-    return (image > threshold).float()
+def transform():    
+    def binarize_image_with_histogram(image):
+        threshold = torch.quantile(image, BINARIZE_IMAGE_TRESHOLD)
+        return (image > threshold).float()
 
-transform = transforms.Compose([
-    transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
-    transforms.ToTensor(),
-    transforms.Lambda(lambda x: x.view(-1)),
-    transforms.Lambda(lambda x: binarize_image_with_histogram(x))
-])
+    return transforms.Compose([
+        transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
+        transforms.ToTensor(),
+        transforms.Lambda(lambda x: x.view(-1)),
+        transforms.Lambda(lambda x: binarize_image_with_histogram(x))
+    ])
 
-train_dataset = torchvision.datasets.MNIST(
+import inspect
+import hashlib
+import re
+    
+def get_code_hash(fn, verbose=False) -> str:
+    def replace_globals_in_string(s: str) -> str:
+        for name, value in globals().items():
+            if inspect.isfunction(value) or inspect.isclass(value) or inspect.ismodule(value):
+                continue
+            try:
+                pattern = re.escape(name)
+                replacement = str(value)
+                s = re.sub(rf'\b{pattern}\b', replacement, s)
+            except Exception:
+                continue
+        return s
+    src = inspect.getsource(fn)
+    src = replace_globals_in_string(src)
+    if verbose:
+        print(src)
+    return hashlib.sha1(src.encode('utf-8')).hexdigest()[:10]
+
+hash_transform_fn = get_code_hash(transform)#, verbose=True)
+log(f"READ DATA")
+
+def load_or_build_cached_mnist(root, train, transform, hash):
+    split = 'train' if train else 'test'
+    path = f'{root}/cached_mnist_{split}_{hash}.pt' #  get_cache_path(config, split)
+    try:
+        cached = torch.load(path)
+        print(f"Loaded cached MNIST {split} from {path}")
+        return torch.utils.data.TensorDataset(cached['data'], cached['labels'])
+    except FileNotFoundError:
+        print(f"No cache found for hash {hash}. Building new cache at {path}...")
+        # dataset = CIFAR10(root='./data', train=(split == 'train'), download=True, transform=transform)
+        dataset = torchvision.datasets.MNIST(
+            root=root,
+            train=train,
+            transform=transform,
+            download=True
+        )
+
+        inputs, labels = [], []
+        # for x, y in tqdm(dataset, desc=f"Preprocessing MNIST {split}"):
+        for x, y in dataset:
+            inputs.append(x.unsqueeze(0))
+            labels.append(torch.tensor(y).unsqueeze(0))
+
+        data_tensor = torch.cat(inputs, dim=0)
+        label_tensor = torch.cat(labels, dim=0)
+        torch.save({'data': data_tensor, 'labels': label_tensor, 'hash': hash}, path)
+        return torch.utils.data.TensorDataset(data_tensor, label_tensor)
+
+# train_dataset = torchvision.datasets.MNIST(
+train_dataset = load_or_build_cached_mnist(
     root="./data",
     train=True,
-    transform=transform,
-    download=True
+    transform=transform(),
+    hash=hash_transform_fn
+    # download=True
 )
 
-test_dataset = torchvision.datasets.MNIST(
+# test_dataset = torchvision.datasets.MNIST(
+test_dataset = load_or_build_cached_mnist(
     root="./data",
     train=False,
-    transform=transform,
-    download=True
+    transform=transform(),
+    hash=hash_transform_fn
+    # download=True
 )
 
 ### SPLIT TRAIN DATASET ###
 
-log(f"LOAD DATA")
+log(f"UPLOAD DATA")
 train_size = int(TRAIN_FRACTION * len(train_dataset))
 val_size = len(train_dataset) - train_size
 train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(DATA_SPLIT_SEED))
@@ -602,44 +827,52 @@ if ONLY_USE_DATA_SUBSET:
 ### MOVE TRAIN DATASET TO GPU ###
 
 train_dataset_samples = len(train_dataset)
-train_images = torch.empty((train_dataset_samples, INPUT_SIZE), dtype=torch.float32, device=device)
-train_labels = torch.empty((train_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32, device=device)
+train_images = torch.empty((train_dataset_samples, INPUT_SIZE), dtype=torch.float32)
+train_labels = torch.empty((train_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32)
 
-train_labels_ = torch.empty((train_dataset_samples), dtype=torch.long, device=device)
+train_labels_ = torch.empty((train_dataset_samples), dtype=torch.long)
 for i, (image, label) in enumerate(train_dataset):
     train_images[i] = image
     train_labels_[i] = label
 train_labels = torch.nn.functional.one_hot(train_labels_, num_classes=NUMBER_OF_CATEGORIES)
 train_labels = train_labels.type(torch.float32)
 
+train_images = train_images.to(device)
+train_labels = train_labels.to(device)
+
 ### MOVE VAL DATASET TO GPU ###
 
 val_dataset_samples = len(val_dataset)
 
-val_images = torch.empty((val_dataset_samples, INPUT_SIZE), dtype=torch.float32, device=device)
-val_labels = torch.empty((val_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32, device=device)
+val_images = torch.empty((val_dataset_samples, INPUT_SIZE), dtype=torch.float32)
+val_labels = torch.empty((val_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32)
 
-val_labels_ = torch.empty((val_dataset_samples), dtype=torch.long, device=device)
+val_labels_ = torch.empty((val_dataset_samples), dtype=torch.long)
 for i, (image, label) in enumerate(val_dataset):
     val_images[i] = image
     val_labels_[i] = label
 val_labels = torch.nn.functional.one_hot(val_labels_, num_classes=NUMBER_OF_CATEGORIES)
 val_labels = val_labels.type(torch.float32)
 
+val_images = val_images.to(device)
+val_labels = val_labels.to(device)
 
 ### MOVE TEST DATASET TO GPU ###
 
 test_dataset_samples = len(test_dataset)
 
-test_images = torch.empty((test_dataset_samples, INPUT_SIZE), dtype=torch.float32, device=device)
-test_labels = torch.empty((test_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32, device=device)
+test_images = torch.empty((test_dataset_samples, INPUT_SIZE), dtype=torch.float32)
+test_labels = torch.empty((test_dataset_samples, NUMBER_OF_CATEGORIES), dtype=torch.float32)
 
-test_labels_ = torch.empty((test_dataset_samples), dtype=torch.long, device=device)
+test_labels_ = torch.empty((test_dataset_samples), dtype=torch.long)
 for i, (image, label) in enumerate(test_dataset):
     test_images[i] = image
     test_labels_[i] = label
 test_labels = torch.nn.functional.one_hot(test_labels_, num_classes=NUMBER_OF_CATEGORIES)
 test_labels = test_labels.type(torch.float32)
+
+test_images = test_images.to(device)
+test_labels = test_labels.to(device)
 
 ### VALIDATE ###
 
@@ -698,7 +931,7 @@ validate = get_validate(model)
 val_loss, val_accuracy = validate(dataset="val")
 passthrough_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_passthrough_fraction()])
 unique_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_unique_fraction()])
-log(f"INIT VAL loss={val_loss:6.3f} acc={val_accuracy*100:6.2f}%                  - Pass {passthrough_log} | Connectivity {unique_log}")
+log(f"INIT VAL loss={val_loss:6.3f} acc={val_accuracy*100:6.2f}%                 - Pass {passthrough_log} | Connectivity {unique_log}")
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
 
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
@@ -746,9 +979,16 @@ for i in range(TRAINING_STEPS):
 
     # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:
-        passthrough_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_passthrough_fraction()])
-        unique_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_unique_fraction()])
-        log(f"Iteration {i + 1:10} - Loss {loss:6.3f} - RegLoss {(1-loss_ce/loss)*100:3.0f}% - Pass {passthrough_log} | Connectivity {unique_log}")
+        passthrough_log = " ".join([f"{value * 100:2.0f}" for value in model.get_passthrough_fraction()])
+        unique_log = " ".join([f"{value * 100:2.0f}" for value in model.get_unique_fraction()])
+        # grad_log = ", ".join([f"{value.grad.std():.0e}" for value in model.parameters()])
+        # grad_log = ", ".join([f"{value.grad.std():2.3e}" for value in model.parameters()])
+        grad_log = " ".join([f"{torch.log10(value.grad.std())*10:2.0f}" for value in model.parameters()])
+        # inputs_log = f"μ{model.log_input_mean:.2f}±{model.log_input_std:.2f}"
+        # self.log_input_norm = torch.norm(X).item()
+        # logits_log = f"μ{model.log_pregain_mean:.0f}±{model.log_pregain_std:.1f}*{1.0/model.log_applied_gain:0.3f} v{model.log_pregain_min:.0f}^{model.log_pregain_max:.0f}= μ{model.log_logits_mean:.0f}±{model.log_logits_std:.1f} ‖{model.log_logits_norm:.0f}‖"
+        logits_log = f"{model.log_pregain_min:.0f}..{model.log_pregain_max:.0f} μ{model.log_pregain_mean:.0f}±{model.log_pregain_std:.1f}/{model.log_applied_gain:.1f} = ±{model.log_logits_std:.1f} ‖{model.log_logits_norm:.0f}‖"
+        log(f"Iteration {i + 1:10} - Loss {loss:6.3f} - RegLoss {(1-loss_ce/loss)*100:2.0f}% - Pass (%) {passthrough_log} | Conn (%) {unique_log} | e-∇x10 {grad_log} | Logits {logits_log}")
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, 
             "tension_loss":tension_loss, })

@@ -87,7 +87,7 @@ PROFILER_ROWS = int(config.get("PROFILER_ROWS", 20))
 FORCE_CPU = config.get("FORCE_CPU", "0").lower() in ("true", "1", "yes")
 COMPILE_MODEL = config.get("COMPILE_MODEL", "0").lower() in ("true", "1", "yes")
 
-C_INIT = config.get("C_INIT", "NORMAL") # NORMAL, UNIFORM, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
+C_INIT = config.get("C_INIT", "DIRAC") # NORMAL, UNIFORM, DIRAC, PERMUTE_1, PERMUTE_U, PERMUTE_1_10, PERMUTE_U_10, PERMUTE_1_K, PERMUTE_U_K, EXP_U, LOG_U, XAVIER_N, XAVIER_U, KAIMING_OUT_N, KAIMING_OUT_U, KAIMING_IN_N, KAIMING_IN_U
 G_INIT = config.get("G_INIT", "NORMAL") # NORMAL, UNIFORM, PASSTHROUGH, XOR
 C_INIT_PARAM = float(config.get("C_INIT_PARAM", -1.0))
 C_SPARSITY = float(config.get("C_SPARSITY", 1.0)) # NOTE: 1.0 works well only for SHALLOW nets, 3.0 for deeper is necessary to binarize well
@@ -107,6 +107,16 @@ TAU_LR = float(config.get("TAU_LR", 0.03))
 if TAU_LR == 0 and SCALE_LOGITS.startswith("ADATAU"):
     SCALE_LOGITS = "0"
 
+
+TOPK_ANNEALING = float(config.get("TOPK_ANNEALING", -1))
+TOPK_ANNEALING_TAIL_IN_EPOCHS = int(config.get("TOPK_ANNEALING_TAIL_IN_EPOCHS", 3))
+TOPK_ANNEALING_MIN_VALUE = int(config.get("TOPK_ANNEALING_MIN_VALUE", 3))
+TOPK_BIAS = 1/1000
+
+DROPOUT = float(config.get("DROPOUT", 0.0))
+
+LEGACY = config.get("LEGACY", "0").lower() in ("true", "1", "yes")
+
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
@@ -117,6 +127,8 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "NO_SOFTMAX",
                "MANUAL_GAIN",
                "SCALE_LOGITS", "SCALE_TARGET", "TAU_LR",
+               "DROPOUT",
+               "TOPK_ANNEALING", "TOPK_ANNEALING_TAIL_IN_EPOCHS", "TOPK_ANNEALING_MIN_VALUE",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
 config_printout_dict = {key: globals()[key] for key in config_printout_keys}
@@ -186,6 +198,49 @@ def binarize_inplace(x, dim=-1, bin_value=1):
     x.data.scatter_(dim=dim, index=ones_at.unsqueeze(dim), value=bin_value)
 
 ############################ MODEL ########################
+class Dropout01(nn.Module):
+    def __init__(self, p: float = 0.5):
+        super(Dropout01, self).__init__()
+        if not 0 <= p < 1:
+            raise ValueError("Dropout probability must be in the range [0, 1).")
+        self.p = p
+
+    def forward(self, x):
+        if not self.training or self.p == 0:
+            return x
+
+        pred = torch.rand_like(x) > self.p
+        zero_one = (torch.rand_like(x) < 0.5).float()
+
+        # mask = pred.float()
+        # return mask * x + (1 - mask) * zero_one
+        return torch.where(pred, x, zero_one)
+
+    def binarize(self, bin_value=1):
+        self.p = 0 # disable dropout after binarization
+
+    def __repr__(self):
+        return f"Dropout01(p={self.p})"
+
+class DropoutFlip(nn.Module):
+    def __init__(self, p: float = 0.5):
+        super(DropoutFlip, self).__init__()
+        if not 0 <= p < 1:
+            raise ValueError("Dropout probability must be in the range [0, 1).")
+        self.p = p
+
+    def forward(self, x):
+        if not self.training or self.p == 0:
+            return x
+
+        return torch.where(torch.rand_like(x) > self.p, x, 1-x)
+
+    def binarize(self, bin_value=1):
+        self.p = 0 # disable dropout after binarization
+
+    def __repr__(self):
+        return f"DropoutFlip(p={self.p})"
+
 class FixedPowerLawInterconnect(nn.Module):
     def __init__(self, inputs, outputs, alpha, x_min=1.0, name=''):
         super(FixedPowerLawInterconnect, self).__init__()
@@ -200,15 +255,18 @@ class FixedPowerLawInterconnect(nn.Module):
             magnitudes = x_min * (1 - r) ** (-1 / (alpha - 1))          # Power law distribution
             signs = torch.randint(low=0, high=2, size=(size,)) * 2 - 1  # -1 or +1
             offsets = magnitudes * signs * max_length
+            indices = torch.arange(start=0, end=size) + offsets.long()
+            indices = indices % max_length
         else:
-            offsets = r * max_length
-        indices = torch.arange(start=0, end=size) + offsets.long()
-        indices = indices % max_length
+            if LEGACY:
+                offsets = r * max_length
+                indices = torch.arange(start=0, end=size) + offsets.long()
+                indices = indices % max_length
+            else:
+                c       = torch.randperm(outputs) % inputs
+                indices = torch.randperm(inputs)[c]
         self.register_buffer("indices", indices)
-
         self.binarized = False
-
-        # self.batch_indices = indices.unsqueeze(0)
 
     @torch.profiler.record_function("mnist::Fixed::FWD")
     def forward(self, x):
@@ -243,7 +301,9 @@ class FixedPowerLawInterconnect(nn.Module):
 
             d = torch.abs(A-B)
             d = torch.minimum(d, self.inputs - d)
-            return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha}, mean={d.float().mean().long()} median={d.float().median().long()})"
+
+            fanout = torch.bincount(self.indices).max().item()
+            return f"FixedPowerLawInterconnect({self.inputs} -> {self.outputs // 2}x2, α={self.alpha}, mean={d.float().mean().long()} median={d.float().median().long()} fanout={fanout})"
 
 class SparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, name=''):
@@ -297,6 +357,48 @@ class SparseInterconnect(nn.Module):
                 self.c.data = torch.log(W)
         elif C_INIT == "UNIFORM":
             nn.init.uniform_(self.c, a=0.0, b=1.0)
+        elif C_INIT == "UNIFORM_10":
+            nn.init.uniform_(self.c, a=0.0, b=10.0)
+        elif C_INIT.startswith("PERMUTE_1"): # for example: PERMUTE_1_10
+            with torch.no_grad():
+                nn.init.normal_(self.c, mean=0.0, std=.01) # add a very small amount of noise as a tie-breaker
+                if  C_INIT.endswith("IN"): n = inputs
+                elif C_INIT.endswith("10"): n = 10
+                elif C_INIT.endswith("100"): n = 100
+                else: n = outputs
+                for i in range(1, n+1):
+                    idx = torch.randperm(outputs) % inputs
+                    idx = torch.randperm(inputs)[idx]
+                    idx = idx.unsqueeze(0)
+                    self.c.data.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * i)
+                self.c.data /= self.c.max().item()
+                self.c.data *= 10 # 10 here is inspired by the min/max range of a gaussian, which for N(0,1) is roughly -5..+5
+                # print(self.c.shape, self.c.sum().item(), self.c.mean().item(), self.c.min().item(), self.c.max().item())
+        elif C_INIT.startswith("PERMUTE_U"): # for example: PERMUTE_U_10
+            with torch.no_grad():
+                nn.init.normal_(self.c, mean=0.0, std=.01) # add a very small amount of noise as a tie-breaker
+                if  C_INIT.endswith("IN"): n = inputs
+                elif C_INIT.endswith("10"): n = 10
+                elif C_INIT.endswith("100"): n = 100
+                else: n = outputs
+                for i in range(1, n+1):
+                    idx = torch.randperm(outputs) % inputs
+                    idx = torch.randperm(inputs)[idx]
+                    idx = idx.unsqueeze(0)
+                    self.c.data.scatter_add_(dim=0, index=idx, src=torch.rand(idx.shape) * i)
+                self.c.data /= self.c.max().item()
+                self.c.data *= 10 # 10 here is inspired by the min/max range of a gaussian, which for N(0,1) is roughly -5..+5
+                # print(self.c.shape, self.c.sum().item(), self.c.mean().item(), self.c.min().item(), self.c.max().item())
+        elif C_INIT == "DIRAC" or C_INIT == "UNIQUE":
+            with torch.no_grad():
+                nn.init.normal_(self.c, mean=0.0, std=.01) # add a very small amount of noise as a tie-breaker
+                idx = torch.randperm(outputs) % inputs
+                idx = torch.randperm(inputs)[idx]
+                idx = idx.unsqueeze(0)
+                self.c.data.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * 10.0) # 10 here is inspired by the min/max range of a gaussian
+                                                                                                                 # which for N(0,1) is roughly -5..+5
+                                                                                                                 # and it seems to work relatively well with softmax
+                # print(self.c.shape, self.c.sum().item(), self.c.mean().item(), self.c.min().item(), self.c.max().item())
         else:
             nn.init.normal_(self.c, mean=0.0, std=1)
         self.name = name
@@ -304,6 +406,16 @@ class SparseInterconnect(nn.Module):
     
     @torch.profiler.record_function("mnist::Sparse::FWD")
     def forward(self, x):
+        if TOPK_ANNEALING > 0:
+            with torch.no_grad():
+                max_topk = self.c.shape[0]
+                new_topk = math.ceil(min(max(0, max_topk - TOPK_ANNEALING_MIN_VALUE) * (TOPK_ANNEALING-TOPK_BIAS) + TOPK_ANNEALING_MIN_VALUE, max_topk))
+                if not hasattr(self, "last_topk") or new_topk < self.last_topk:
+                    self.last_topk = new_topk
+                    with torch.no_grad():
+                        threshold_value = torch.topk(self.c, new_topk, dim=0, largest=True, sorted=False).values[-1]
+                        self.c[self.c < threshold_value] = -float('inf')
+
         connections = F.softmax(self.c * C_SPARSITY, dim=0) if not self.binarized else self.c
         return torch.matmul(x, connections)
 
@@ -380,7 +492,6 @@ class BlockSparseInterconnect(nn.Module):
 # F1000, α=1   ->   acc_bin_train=84.29%        train_acc_diff= 0.93% acc_train=85.22%   acc_bin_TEST=84.40% SCALE_LOGITS="TAU" MANUAL_GAIN=3
 # K1000, K=5   ->   acc_bin_train=89.67%        train_acc_diff= 5.05% acc_train=94.72%   acc_bin_TEST=88.02%
 # K1000, K=25  ->   acc_bin_train=94.22%        train_acc_diff= 3.81% acc_train=98.03%   acc_bin_TEST=92.53%    --- top 25 is not enough for the input layer!
-# L1000        ->   acc_bin_train=97.21% <<<<<  train_acc_diff= 2.36% acc_train=99.56% < acc_bin_TEST=94.66%    --- winner
 # L1000        ->   acc_bin_train=97.21% <<<<<  train_acc_diff= 2.36% acc_train=99.56% < acc_bin_TEST=94.66%    --- winner on BIN
 
 # EPOCHS=30  C_SPARSITY=1 LEARNING_RATE=0.075 SCALE_LOGITS="TAU" MANUAL_GAIN=3 GATE_ARCHITECTURE="[1000]"
@@ -407,13 +518,49 @@ class BlockSparseInterconnect(nn.Module):
 class TopKSparseInterconnect(nn.Module):
     def __init__(self, inputs, outputs, topk, name=''):
         super(TopKSparseInterconnect, self).__init__()
+        self.top_c = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.float32, device=device))
+
         with torch.no_grad():
-            cc = torch.normal(mean=0.0, std=1, size=(inputs, outputs))
-            top_indices = torch.zeros((topk, outputs), dtype=torch.long)
-        self.top_c = nn.Parameter(torch.zeros((topk, outputs), dtype=torch.float32))
-        with torch.no_grad():
-            torch.topk(cc, topk, dim=0, largest=True, sorted=False, out=(self.top_c, top_indices))
-        self.register_buffer("top_indices", top_indices)
+            cc = torch.normal(mean=0.0, std=.01, size=(inputs, outputs), device=device) # tie-breaker for TopK
+            if C_INIT.startswith("PERMUTE_1"): # for example: PERMUTE_1_K
+                if  C_INIT.endswith("IN"): n = inputs
+                elif C_INIT.endswith("10"): n = 10
+                elif C_INIT.endswith("100"): n = 100
+                elif C_INIT.endswith("K"): n = topk
+                else: n = outputs
+                for i in range(1, n+1):
+                    idx = torch.randperm(outputs, device=device) % inputs
+                    idx = torch.randperm(inputs, device=device)[idx]
+                    idx = idx.unsqueeze(0)
+                    cc.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * i)
+                cc /= cc.max().item()
+                cc *= 10 # 10 here is inspired by the min/max range of a gaussian, which for N(0,1) is roughly -5..+5
+            elif C_INIT.startswith("PERMUTE_U"): # for example: PERMUTE_U_K
+                if  C_INIT.endswith("IN"): n = inputs
+                elif C_INIT.endswith("10"): n = 10
+                elif C_INIT.endswith("100"): n = 100
+                elif C_INIT.endswith("K"): n = topk
+                else: n = outputs
+                for i in range(1, n+1):
+                    idx = torch.randperm(outputs, device=device) % inputs
+                    idx = torch.randperm(inputs, device=device)[idx]
+                    idx = idx.unsqueeze(0)
+                    cc.scatter_add_(dim=0, index=idx, src=torch.rand(idx.shape) * i)
+                cc /= cc.max().item()
+                cc *= 10 # 10 here is inspired by the min/max range of a gaussian, which for N(0,1) is roughly -5..+5
+            # NOTE: Dirac does improve TopK performance, fallback to Gaussian initialisation instead
+            # elif C_INIT == "DIRAC" or C_INIT == "UNIQUE": 
+            #     idx = torch.randperm(outputs, device=device) % inputs
+            #     idx = torch.randperm(inputs, device=device)[idx]
+            #     idx = idx.unsqueeze(0)
+            #     cc.scatter_add_(dim=0, index=idx, src=torch.ones_like(idx, dtype=torch.float32) * 10.0) # 10 here is inspired by the min/max range of a gaussian
+            #                                                                                             # which for N(0,1) is roughly -5..+5
+            else:
+                cc = torch.normal(mean=0.0, std=1, size=(inputs, outputs))                    
+
+            self.top_c.data, top_indices = torch.topk(cc, topk, dim=0, largest=True, sorted=True)
+            self.register_buffer("top_indices", top_indices)
+
         self.inputs = inputs
         self.name = name
         self.binarized = False
@@ -423,8 +570,17 @@ class TopKSparseInterconnect(nn.Module):
         if self.binarized:
             return torch.matmul(x, self.c)
 
-        x = x[:, self.top_indices]
-        top_connections = F.softmax(self.top_c * C_SPARSITY, dim=0)
+        if TOPK_ANNEALING > 0:
+            max_topk = self.top_indices.shape[0]
+            new_topk = math.ceil(min(max(0, max_topk - TOPK_ANNEALING_MIN_VALUE) * (TOPK_ANNEALING-TOPK_BIAS) + TOPK_ANNEALING_MIN_VALUE, max_topk))
+            top_indices = self.top_indices[:new_topk, :]
+            top_c       = self.top_c[:new_topk, :]
+        else:
+            top_indices = self.top_indices
+            top_c       = self.top_c
+
+        x = x[:, top_indices]
+        top_connections = F.softmax(top_c * C_SPARSITY, dim=0)
         return (x * top_connections).sum(dim=1)
 
     def binarize(self, bin_value=1):
@@ -565,6 +721,11 @@ class Model(nn.Module):
                 layer_inputs += R[-2]
         self.layers = nn.ModuleList(layers_)
 
+        if DROPOUT > 0.0001:
+            self.dropout = Dropout01(p=DROPOUT)
+        elif DROPOUT < -0.0001:
+            self.dropout_last = Dropout01(p=-DROPOUT)
+
     @torch.profiler.record_function("mnist::Model::FWD")
     def forward(self, X):
         with torch.no_grad():
@@ -584,6 +745,11 @@ class Model(nn.Module):
                     X = torch.cat([X, I], dim=-1)
                 if PASS_RESIDUAL and (layer_idx > 1 or not PASS_INPUT_TO_ALL_LAYERS) and layer_idx < len(self.layers)-2:
                     X = torch.cat([X, R[-2]], dim=-1)
+                if hasattr(self, 'dropout'):
+                    X = self.dropout(X)
+
+        if hasattr(self, 'dropout_last'):
+            X = self.dropout_last(X)
 
         X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         if not self.training:   # INFERENCE ends here! Everything past this line will only concern training
@@ -663,11 +829,11 @@ class Model(nn.Module):
                                             # SCALE_TARGET=1   TAU_LR=.01              ->   97.62/96.32% LLLLx1000 (50 epochs)
             std = torch.std(X).item()
             t = std / (4.0 * SCALE_TARGET)
-            if self.adatau < 0.1:
-                self.adatau = np.sqrt(self.outputs_per_category)
+            if self.adatau < 0.1:                                # TODO: better check against div-by-zero / epsilon 
+                self.adatau = np.sqrt(self.outputs_per_category) # TODO: make it more clear that this is an initialisation
             else:
                 self.adatau = self.adatau * (1-TAU_LR) + t * TAU_LR
-            self.adatau = min(self.adatau, self.outputs_per_category / 6)
+            self.adatau = min(self.adatau, self.outputs_per_category / 6) # TODO: sqrt(self.outputs_per_category) would make more sense than /6
             X = X / self.adatau
             self.log_applied_gain = self.adatau
         elif SCALE_LOGITS == "ADAVAR_TANH": # SCALE_TARGET=1 TAU_LR=.01               ->    98.71/97.44% Lx8000 (20epochs)
@@ -735,9 +901,11 @@ class Model(nn.Module):
     def clone_and_binarize(self, device, bin_value=1):
         model_binarized = Model(self.seed, self.gate_architecture, self.interconnect_architecture, self.number_of_categories, self.input_size).to(device)
         model_binarized.load_state_dict(self.state_dict())
-        for layer in model_binarized.layers:
+        def binarize_if_applicable(layer):
             if hasattr(layer, 'binarize') and callable(layer.binarize):
                 layer.binarize(bin_value)
+        model_binarized.apply(binarize_if_applicable)
+        model_binarized.eval()
         return model_binarized
 
     def get_passthrough_fraction(self):
@@ -753,23 +921,24 @@ class Model(nn.Module):
     
     def get_unique_fraction(self):
         unique_fraction_array = []
-        for model_layer in self.layers:
-            # TODO: better to measure only unique indices that point to the previous layer and ignore skip connections:
-            # ... = sum(unique_indices < previous_layer.c.shape[1])
-            if hasattr(model_layer, 'c'):
-                c = model_layer.c.view(model_layer.c.shape[0], -1, 2)
-                A = c[:,:,0]
-                B = c[:,:,1]
-                unique_indices_a = torch.unique(torch.argmax(A, dim=0)).numel()
-                unique_indices_b = torch.unique(torch.argmax(B, dim=0)).numel()
-                #print(torch.unique(torch.argmax(model_layer.c, dim=0)).numel(), unique_indices_a, unique_indices_b, "vs", model_layer.c.shape)
-                unique_indices = (unique_indices_a + unique_indices_b) * 0.5
-                min_dimension = min(model_layer.c.shape[0], model_layer.c.shape[1] // 2)
-                unique_fraction_array.append(unique_indices / min_dimension)
-            elif hasattr(model_layer, 'indices'):
-                max_inputs = model_layer.indices.max().item() # approximation
-                unique_indices = torch.unique(model_layer.indices).numel()
-                unique_fraction_array.append(unique_indices / max_inputs)
+        with torch.no_grad():
+            for model_layer in self.layers:
+                # TODO: better to measure only unique indices that point to the previous layer and ignore skip connections:
+                # ... = sum(unique_indices < previous_layer.c.shape[1])
+                if hasattr(model_layer, 'c'):
+                    unique_indices = torch.unique(torch.argmax(model_layer.c, dim=0)).numel()
+                    unique_fraction_array.append(unique_indices / model_layer.c.shape[0])
+                elif hasattr(model_layer, 'top_c') and hasattr(model_layer, 'top_indices'):
+                    outputs = model_layer.top_c.shape[1]
+                    top1 = torch.argmax(model_layer.top_c, dim=0)
+                    indices = model_layer.top_indices[top1, torch.arange(outputs)]
+                    max_inputs = indices.max().item() # approximation
+                    unique_indices = torch.unique(indices).numel()
+                    unique_fraction_array.append(unique_indices / max_inputs)
+                elif hasattr(model_layer, 'indices'):
+                    max_inputs = model_layer.indices.max().item() # approximation
+                    unique_indices = torch.unique(model_layer.indices).numel()
+                    unique_fraction_array.append(unique_indices / max_inputs)
         return unique_fraction_array
 
     def compute_selected_gates_fraction(self, selected_gates):
@@ -973,6 +1142,7 @@ def get_validate(default_model):
                 val_loss += F.cross_entropy(val_output, y_val, reduction="sum").item()
                 correct += (val_output.argmax(dim=1) == y_val.argmax(dim=1)).sum().item()
             val_steps += len(x_val)
+        assert val_steps == number_of_samples
         val_loss /= val_steps
         val_accuracy = correct / val_steps
         return val_loss, val_accuracy
@@ -1003,12 +1173,25 @@ log(f"INIT VAL loss={val_loss:6.3f} acc={val_accuracy*100:6.2f}%                
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
 
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
+if LEGACY:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0) # if weight decay encourages uniform distribution
+else:
+    optimizer = torch.optim.Adam (model.parameters(), lr=LEARNING_RATE)
 time_start = time.time()
 
 if PROFILE: prof.start()
 for i in range(TRAINING_STEPS):
-    indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
+    if LEGACY:
+        indices = torch.randint(0, train_dataset_samples, (BATCH_SIZE,), device=device)
+    else:
+        # shuffle dataset instead of random sampling
+        start_idx = (i * BATCH_SIZE) % train_dataset_samples
+        end_idx = min(start_idx + BATCH_SIZE, train_dataset_samples)
+        if start_idx < BATCH_SIZE:
+            all_indices = torch.randperm(train_dataset_samples, device=device)
+        indices = all_indices[start_idx: end_idx]    
+        #indices = torch.arange(start_idx, end_idx, device=device)
+
     x = train_images[indices]
     y = train_labels[indices]
     optimizer.zero_grad()
@@ -1045,6 +1228,11 @@ for i in range(TRAINING_STEPS):
         loss.backward()
         optimizer.step()
 
+    def compute_decay_rate(start_value, end_value, steps):
+        return np.exp(np.log(end_value / start_value) / steps)
+    if TOPK_ANNEALING > 0 and (i + 1) % EPOCH_STEPS == 0: # anneal only once per epoch for speed
+        TOPK_ANNEALING *= compute_decay_rate(1, TOPK_BIAS, EPOCHS-TOPK_ANNEALING_TAIL_IN_EPOCHS)
+
     # TODO: model.eval here perhaps speeds everything up?
     if (i + 1) % PRINTOUT_EVERY == 0:
         passthrough_log = " ".join([f"{value * 100:2.0f}" for value in model.get_passthrough_fraction()])
@@ -1056,20 +1244,29 @@ for i in range(TRAINING_STEPS):
         # self.log_input_norm = torch.norm(X).item()
         # logits_log = f"μ{model.log_pregain_mean:.0f}±{model.log_pregain_std:.1f}*{1.0/model.log_applied_gain:0.3f} v{model.log_pregain_min:.0f}^{model.log_pregain_max:.0f}= μ{model.log_logits_mean:.0f}±{model.log_logits_std:.1f} ‖{model.log_logits_norm:.0f}‖"
         logits_log = f"{model.log_pregain_min:.0f}..{model.log_pregain_max:.0f} μ{model.log_pregain_mean:.0f}±{model.log_pregain_std:.1f}/{model.log_applied_gain:.1f} = ±{model.log_logits_std:.1f} ‖{model.log_logits_norm:.0f}‖"
+        if TOPK_ANNEALING > 0:
+            logits_log += f" top_k: {TOPK_ANNEALING*100:0.1f}%"
         log(f"Iteration {i + 1:10} - Loss {loss:6.3f} - RegLoss {(1-loss_ce/loss)*100:2.0f}% - Pass (%) {passthrough_log} | Conn (%) {unique_log} | e-∇x10 {grad_log} | Logits {logits_log}")
         WANDB_KEY and wandb.log({"training_step": i, "loss": loss, 
             "regularization_loss_fraction":(1-loss_ce/loss)*100, 
             "tension_loss":tension_loss, })
-    if (i + 1) % VALIDATE_EVERY == 0:
+    if (i + 1) % VALIDATE_EVERY == 0 or (i + 1) == TRAINING_STEPS:
         current_epoch = (i+1) // EPOCH_STEPS
 
+        model.eval()
         train_loss, train_acc = validate('train')
         log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS}     TRN loss={train_loss:.3f} acc={train_acc*100:.2f}%")
         model_binarized = get_binarized_model(model)
         _, bin_train_acc = validate(dataset="train", model=model_binarized)
         train_acc_diff = train_acc-bin_train_acc
         log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS} BIN TRN            acc={bin_train_acc*100:.2f}%, train_acc_diff={train_acc_diff*100:.2f}%")
+
+        test_loss, test_acc = validate('test')
+        test_acc_diff = train_acc-test_acc
+        log(f"{LOG_NAME} EPOCH={current_epoch}/{EPOCHS}     TST            acc={test_acc*100:.2f}%, test_acc_diff= {test_acc_diff*100:.2f}%, loss={test_loss:.3f}")
         
+        model.train()
+
         top1w = torch.tensor(0., device=device)
         top2w = torch.tensor(0., device=device)
         top4w = torch.tensor(0., device=device)
@@ -1138,6 +1335,7 @@ time_end = time.time()
 training_total_time = time_end - time_start 
 log(f"Training took {training_total_time:.2f} seconds, per iteration: {(training_total_time) / TRAINING_STEPS * 1000:.2f} milliseconds")
 
+model.eval()
 test_loss, test_acc = validate('test')
 log(f"    TEST loss={test_loss:.3f} acc={test_acc*100:.2f}%")
 

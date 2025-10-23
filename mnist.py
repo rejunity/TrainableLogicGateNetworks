@@ -1063,6 +1063,7 @@ def load_or_build_cached_dataset(name, root, train, transform, hash):
         data_tensor = torch.cat(inputs, dim=0)
         label_tensor = torch.cat(labels, dim=0)
         torch.save({'data': data_tensor, 'labels': label_tensor, 'hash': hash}, path)
+        print(f"{name} {split} dataset contains {len(inputs)} inputs and {len(torch.unique(label_tensor))} classes")
         return torch.utils.data.TensorDataset(data_tensor, label_tensor)
 
 train_dataset = load_or_build_cached_dataset(

@@ -41,7 +41,9 @@ config = { **dotenv_values(".env"), **os.environ }
 # CONNECTIVITY_GAIN=1 LEARNING_RATE=0.001 PASS_RESIDUAL=0 PASS_INPUT_TO_ALL_LAYERS=0 C_INIT="NORMAL" C_SPARSITY=100 C_INIT_PARAM=0 GATE_ARCHITECTURE="[250,250,250,250,250,250]"PRINTOUT_EVERY=55 VALIDATE_EVERY=211 EPOCHS=200 uv run mnist.py
 # LEARNING_RATE=0.075 C_SPARSITY=1 NO_SOFTMAX=1 SCALE_TARGET=1.5 SCALE_LOGITS="ADAVAR" TAU_LR=.03 MANUAL_GAIN=1 PASS_RESIDUAL=0 PASS_INPUT_TO_ALL_LAYERS=0 KINETO_LOG_LEVEL=99 GATE_ARCHITECTURE="[8000]" INTERCONNECT_ARCHITECTURE="[]" PRINTOUT_EVERY=211 VALIDATE_EVERY=1055 IMG_WIDTH=28 EPOCHS=30 uv run mnist.py
 
-LOG_TAG = config.get("LOG_TAG", "MNIST")
+DATASET = config.get("DATASET", "MNIST") # MNIST, CIFAR10
+
+LOG_TAG = config.get("LOG_TAG", DATASET)
 TIMEZONE = config.get("TIMEZONE", "UTC")
 PAPERTRAIL_HOST = config.get("PAPERTRAIL_HOST")
 PAPERTRAIL_PORT = config.get("PAPERTRAIL_PORT")
@@ -67,7 +69,7 @@ assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
 EPOCHS = int(config.get("EPOCHS", 30)) # previous: 50
-EPOCH_STEPS = math.floor((60_000 * TRAIN_FRACTION) / BATCH_SIZE) # MNIST consists of 60K images
+EPOCH_STEPS = math.floor((60_000 * TRAIN_FRACTION) / BATCH_SIZE) # both MNIST and CIFAR10/100 consist of 60K images
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS))
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS * 5))
@@ -968,18 +970,46 @@ log(f"model={model}")
 ############################ DATA ########################
 
 ### GENERATORS
-def transform():    
+def transform():
     def binarize_image_with_histogram(image):
         threshold = torch.quantile(image, BINARIZE_IMAGE_TRESHOLD)
         return (image > threshold).float()
 
-    return transforms.Compose([
-        transforms.CenterCrop((IMG_CROP, IMG_CROP)),
-        transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
-        transforms.ToTensor(),
-        transforms.Lambda(lambda x: x.view(-1)),
-        transforms.Lambda(lambda x: binarize_image_with_histogram(x))
-    ])
+    def transform_monochrome(apply_augmentations=False):
+        return transforms.Compose([
+            transforms.CenterCrop((IMG_CROP, IMG_CROP)),
+            transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
+            transforms.ToTensor(),
+            transforms.Lambda(lambda x: x.view(-1)),
+            transforms.Lambda(lambda x: binarize_image_with_histogram(x))
+        ])
+
+    def transform_RGB(apply_augmentations=False):
+        # NOTE for the future, validation & test sets should not use augmentations!
+
+        # https://www.kaggle.com/code/kmldas/cifar10-resnet-90-accuracy-less-than-5-min
+        # stats = ((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+        # train_tfms = tt.Compose([tt.RandomCrop(32, padding=4, padding_mode='reflect'), 
+        #                          tt.RandomHorizontalFlip(), 
+        #                          tt.ToTensor(), 
+        #                          tt.Normalize(*stats,inplace=True)])
+        # valid_tfms = tt.Compose([tt.ToTensor(), tt.Normalize(*stats)])
+        
+        return transforms.Compose([
+            transforms.CenterCrop((IMG_CROP, IMG_CROP)),
+            transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
+            transforms.ToTensor(),
+            transforms.Normalize(np.array([125.3, 123.0, 113.9]) / 255.0,
+                                 np.array([63.0, 62.1, 66.7]) / 255.0), #  np.array([51.9, 50.9, 51.3]) / 255.0)
+            transforms.Grayscale(1),
+            transforms.Lambda(lambda x: x.view(-1)),
+            transforms.Lambda(lambda x: binarize_image_with_histogram(x))
+        ])
+
+    if DATASET.startswith("CIFAR"):
+        return transform_RGB()
+    else:
+        return transform_monochrome()
 
 import inspect
 import hashlib
@@ -1006,17 +1036,18 @@ def get_code_hash(fn, verbose=False) -> str:
 hash_transform_fn = get_code_hash(transform)#, verbose=True)
 log(f"READ DATA")
 
-def load_or_build_cached_mnist(root, train, transform, hash):
+def load_or_build_cached_dataset(name, root, train, transform, hash):
     split = 'train' if train else 'test'
-    path = f'{root}/cached_mnist_{split}_{hash}.pt' #  get_cache_path(config, split)
+    path = f'{root}/cached_{name.lower()}_{split}_{hash}.pt' #  get_cache_path(config, split)
     try:
         cached = torch.load(path)
-        print(f"Loaded cached MNIST {split} from {path}")
+        print(f"Loaded cached {name.upper()} {split} from {path}")
         return torch.utils.data.TensorDataset(cached['data'], cached['labels'])
     except FileNotFoundError:
-        print(f"No cache found for hash {hash}. Building new cache at {path}...")
-        # dataset = CIFAR10(root='./data', train=(split == 'train'), download=True, transform=transform)
-        dataset = torchvision.datasets.MNIST(
+        print(f"No cache found for {name} with hash {hash}. Building new cache at {path}...")
+        dataset_class = getattr(torchvision.datasets, name)
+        print(f"Loading dataset from {dataset_class}")
+        dataset = dataset_class(
             root=root,
             train=train,
             transform=transform,
@@ -1034,8 +1065,8 @@ def load_or_build_cached_mnist(root, train, transform, hash):
         torch.save({'data': data_tensor, 'labels': label_tensor, 'hash': hash}, path)
         return torch.utils.data.TensorDataset(data_tensor, label_tensor)
 
-# train_dataset = torchvision.datasets.MNIST(
-train_dataset = load_or_build_cached_mnist(
+train_dataset = load_or_build_cached_dataset(
+    name=DATASET, # MNIST or CIFAR10
     root="./data",
     train=True,
     transform=transform(),
@@ -1043,8 +1074,8 @@ train_dataset = load_or_build_cached_mnist(
     # download=True
 )
 
-# test_dataset = torchvision.datasets.MNIST(
-test_dataset = load_or_build_cached_mnist(
+test_dataset = load_or_build_cached_dataset(
+    name=DATASET, # MNIST or CIFAR10
     root="./data",
     train=False,
     transform=transform(),

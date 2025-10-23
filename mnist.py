@@ -50,6 +50,9 @@ PAPERTRAIL_PORT = config.get("PAPERTRAIL_PORT")
 WANDB_KEY = config.get("WANDB_KEY")
 WANDB_PROJECT = config.get("WANDB_PROJECT", "mnist_project")
 
+IMG_CHANNELS = 3 if DATASET.startswith("CIFAR") else 1
+IMG_COUNT = 50_000 if DATASET.startswith("CIFAR") else 60_000
+
 BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", 0.75))
 IMG_WIDTH = int(config.get("IMG_WIDTH", 28)) # previous 16 which was suitable for Tiny Tapeout
 IMG_CROP = int(config.get("IMG_CROP", 28))
@@ -69,7 +72,7 @@ assert len(GATE_ARCHITECTURE) == len(INTERCONNECT_ARCHITECTURE)
 BATCH_SIZE = int(config.get("BATCH_SIZE", 256))
 
 EPOCHS = int(config.get("EPOCHS", 30)) # previous: 50
-EPOCH_STEPS = math.floor((60_000 * TRAIN_FRACTION) / BATCH_SIZE) # both MNIST and CIFAR10/100 consist of 60K images
+EPOCH_STEPS = math.floor((IMG_COUNT * TRAIN_FRACTION) / BATCH_SIZE) # both MNIST and CIFAR10/100 consist of 60K images
 TRAINING_STEPS = EPOCHS*EPOCH_STEPS
 PRINTOUT_EVERY = int(config.get("PRINTOUT_EVERY", EPOCH_STEPS))
 VALIDATE_EVERY = int(config.get("VALIDATE_EVERY", EPOCH_STEPS * 5))
@@ -1006,7 +1009,7 @@ def transform():
             transforms.Lambda(lambda x: binarize_image_with_histogram(x))
         ])
 
-    if DATASET.startswith("CIFAR"):
+    if IMG_CHANNELS == 3:
         return transform_RGB()
     else:
         return transform_monochrome()

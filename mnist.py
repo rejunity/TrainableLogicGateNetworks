@@ -51,7 +51,7 @@ WANDB_KEY = config.get("WANDB_KEY")
 WANDB_PROJECT = config.get("WANDB_PROJECT", "mnist_project")
 
 IMG_CHANNELS = 3 if DATASET.startswith("CIFAR") else 1
-IMG_COUNT = 50_000 if DATASET.startswith("CIFAR") else 60_000
+IMG_COUNT = 50_000 if DATASET.startswith("CIFAR") else (240_000 if DATASET == "EMNIST" else 60_000) 
 DEFAULT_IMG_WIDTH = 32 if DATASET.startswith("CIFAR") else 28
 
 BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", 0.75))
@@ -1050,12 +1050,16 @@ def load_or_build_cached_dataset(name, root, train, transform, hash):
     except FileNotFoundError:
         print(f"No cache found for {name.upper()} {split} with hash {hash}. Building new cache at {path}...")
         dataset_class = getattr(torchvision.datasets, name)
+        extra_args = {"split": "digits"} if name == "EMNIST" else {} # EMNIST is a special case as it has multiple splits
+                                                                     # we assume only 'digits' subset with 10 classes
+                                                                     # similar to the original MNIST here
         print(f"Loading dataset from {dataset_class}")
         dataset = dataset_class(
             root=root,
             train=train,
             transform=transform,
-            download=True
+            download=True,
+            **extra_args
         )
 
         inputs, labels = [], []

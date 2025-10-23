@@ -1044,7 +1044,7 @@ def load_or_build_cached_dataset(name, root, train, transform, hash):
         print(f"Loaded cached {name.upper()} {split} from {path}")
         return torch.utils.data.TensorDataset(cached['data'], cached['labels'])
     except FileNotFoundError:
-        print(f"No cache found for {name} with hash {hash}. Building new cache at {path}...")
+        print(f"No cache found for {name.upper()} {split} with hash {hash}. Building new cache at {path}...")
         dataset_class = getattr(torchvision.datasets, name)
         print(f"Loading dataset from {dataset_class}")
         dataset = dataset_class(

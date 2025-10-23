@@ -52,10 +52,11 @@ WANDB_PROJECT = config.get("WANDB_PROJECT", "mnist_project")
 
 IMG_CHANNELS = 3 if DATASET.startswith("CIFAR") else 1
 IMG_COUNT = 50_000 if DATASET.startswith("CIFAR") else 60_000
+DEFAULT_IMG_WIDTH = 32 if DATASET.startswith("CIFAR") else 28
 
 BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", 0.75))
-IMG_WIDTH = int(config.get("IMG_WIDTH", 28)) # previous 16 which was suitable for Tiny Tapeout
-IMG_CROP = int(config.get("IMG_CROP", 28))
+IMG_WIDTH = int(config.get("IMG_WIDTH", DEFAULT_IMG_WIDTH)) # TT (Tiny Tapeout) optimised value: 16
+IMG_CROP = int(config.get("IMG_CROP", DEFAULT_IMG_WIDTH))   # TT (Tiny Tapeout) optimised value: 22
 INPUT_SIZE = IMG_WIDTH * IMG_WIDTH
 DATA_SPLIT_SEED = int(config.get("DATA_SPLIT_SEED", 42))
 TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.99)) # previous 0.9, NOTE: since we are not using VALIDATION subset in VALIDATION pass, we can boost accuracy a bit by training on the whole dataset

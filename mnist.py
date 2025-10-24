@@ -59,9 +59,11 @@ old_BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", -1))
 BINARIZE_IMAGE_THRESHOLD = ast.literal_eval(config.get("BINARIZE_IMAGE_THRESHOLD", "0.75")) if old_BINARIZE_IMAGE_TRESHOLD < 0 else old_BINARIZE_IMAGE_TRESHOLD # Support legacy name with spelling mistake
 if not isinstance(BINARIZE_IMAGE_THRESHOLD, list):
     BINARIZE_IMAGE_THRESHOLD = [BINARIZE_IMAGE_THRESHOLD]
+RGB_TO = config.get("RGB_TO", "MONO") # MONO, LAB
+RGB_TO_LAB = (RGB_TO == 3 or RGB_TO == "YUV" or RGB_TO == "LAB" or RGB_TO == "OKLAB")
 IMG_WIDTH = int(config.get("IMG_WIDTH", DEFAULT_IMG_WIDTH)) # TT (Tiny Tapeout) optimised value: 16
 IMG_CROP = int(config.get("IMG_CROP", DEFAULT_IMG_WIDTH))   # TT (Tiny Tapeout) optimised value: 22
-INPUT_SIZE = IMG_WIDTH * IMG_WIDTH * len(BINARIZE_IMAGE_THRESHOLD)
+INPUT_SIZE = IMG_WIDTH * IMG_WIDTH * len(BINARIZE_IMAGE_THRESHOLD) * (3 if RGB_TO_LAB else 1)
 DATA_SPLIT_SEED = int(config.get("DATA_SPLIT_SEED", 42))
 TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.99)) # previous 0.9, NOTE: since we are not using VALIDATION subset in VALIDATION pass, we can boost accuracy a bit by training on the whole dataset
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
@@ -129,7 +131,7 @@ DROPOUT = float(config.get("DROPOUT", 0.0))
 LEGACY = config.get("LEGACY", "0").lower() in ("true", "1", "yes")
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
-               "DATASET", "IMG_COUNT",
+               "DATASET", "IMG_COUNT", "RGB_TO",
                "BINARIZE_IMAGE_THRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "IMG_CROP", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
@@ -980,6 +982,30 @@ log(f"model={model}")
 
 ### GENERATORS
 def transform():
+    def srgb_to_linear(x):
+        return torch.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+
+    def rgb_to_oklab(x: torch.Tensor) -> torch.Tensor:
+        # x: 3xHxW in [0,1] sRGB
+        if x.dim() == 3: x = x.unsqueeze(0)      # 1x3xHxW
+        r, g, b = x[:,0:1], x[:,1:2], x[:,2:3]
+        r, g, b = srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)
+
+        # M1: linear RGB -> LMS (OKLab)
+        l = 0.4122214708*r + 0.5363325363*g + 0.0514459929*b
+        m = 0.2119034982*r + 0.6806995451*g + 0.1073969566*b
+        s = 0.0883024619*r + 0.2817188376*g + 0.6299787005*b
+
+        l_, m_, s_ = l.clamp_min(0).pow(1/3), m.clamp_min(0).pow(1/3), s.clamp_min(0).pow(1/3)
+
+        # M2: LMS^(1/3) -> OKLab
+        L =  0.2104542553*l_ + 0.7936177850*m_ - 0.0040720468*s_
+        a =  1.9779984951*l_ - 2.4285922050*m_ + 0.4505937099*s_
+        b =  0.0259040371*l_ + 0.7827717662*m_ - 0.8086757660*s_
+
+        out = torch.cat([L, a, b], dim=1)        # 1x3xHxW
+        return out.squeeze(0)                    # 3xHxW
+
     def binarize_image_with_histogram(image):
         assert isinstance(BINARIZE_IMAGE_THRESHOLD, list)
         thresholds = torch.as_tensor(BINARIZE_IMAGE_THRESHOLD, dtype=image.dtype, device=image.device)
@@ -1008,6 +1034,13 @@ def transform():
         # valid_tfms = tt.Compose([tt.ToTensor(), tt.Normalize(*stats)])
         
         return transforms.Compose([
+            transforms.CenterCrop((IMG_CROP, IMG_CROP)),
+            transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
+            transforms.ToTensor(),
+            transforms.Lambda(rgb_to_oklab),
+            transforms.Lambda(lambda x: x.view(-1)),
+            transforms.Lambda(lambda x: binarize_image_with_histogram(x))
+            ] if RGB_TO_LAB else [
             transforms.CenterCrop((IMG_CROP, IMG_CROP)),
             transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
             transforms.ToTensor(),

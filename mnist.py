@@ -55,10 +55,13 @@ IMG_CHANNELS = 3 if DATASET.startswith("CIFAR") else 1
 IMG_COUNT = 50_000 if DATASET.startswith("CIFAR") else (240_000 if DATASET == "EMNIST" else 60_000) 
 DEFAULT_IMG_WIDTH = 32 if DATASET.startswith("CIFAR") else 28
 
-BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", 0.75))
+old_BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", -1))
+BINARIZE_IMAGE_THRESHOLD = ast.literal_eval(config.get("BINARIZE_IMAGE_THRESHOLD", "0.75")) if old_BINARIZE_IMAGE_TRESHOLD < 0 else old_BINARIZE_IMAGE_TRESHOLD # Support legacy name with spelling mistake
+if not isinstance(BINARIZE_IMAGE_THRESHOLD, list):
+    BINARIZE_IMAGE_THRESHOLD = [BINARIZE_IMAGE_THRESHOLD]
 IMG_WIDTH = int(config.get("IMG_WIDTH", DEFAULT_IMG_WIDTH)) # TT (Tiny Tapeout) optimised value: 16
 IMG_CROP = int(config.get("IMG_CROP", DEFAULT_IMG_WIDTH))   # TT (Tiny Tapeout) optimised value: 22
-INPUT_SIZE = IMG_WIDTH * IMG_WIDTH
+INPUT_SIZE = IMG_WIDTH * IMG_WIDTH * len(BINARIZE_IMAGE_THRESHOLD)
 DATA_SPLIT_SEED = int(config.get("DATA_SPLIT_SEED", 42))
 TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.99)) # previous 0.9, NOTE: since we are not using VALIDATION subset in VALIDATION pass, we can boost accuracy a bit by training on the whole dataset
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
@@ -127,7 +130,7 @@ LEGACY = config.get("LEGACY", "0").lower() in ("true", "1", "yes")
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "DATASET", "IMG_COUNT",
-               "BINARIZE_IMAGE_TRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "IMG_CROP", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
+               "BINARIZE_IMAGE_THRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "IMG_CROP", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE",
@@ -978,8 +981,11 @@ log(f"model={model}")
 ### GENERATORS
 def transform():
     def binarize_image_with_histogram(image):
-        threshold = torch.quantile(image, BINARIZE_IMAGE_TRESHOLD)
-        return (image > threshold).float()
+        assert isinstance(BINARIZE_IMAGE_THRESHOLD, list)
+        thresholds = torch.as_tensor(BINARIZE_IMAGE_THRESHOLD, dtype=image.dtype, device=image.device)
+        quantiles = torch.quantile(image, thresholds)
+        channels = [(image > q).float() for q in quantiles]
+        return torch.stack(channels, dim=0).view(-1)
 
     def transform_monochrome(apply_augmentations=False):
         return transforms.Compose([

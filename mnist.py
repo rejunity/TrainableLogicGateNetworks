@@ -10,7 +10,7 @@
 #   "asyncio",
 # ]
 # [tool.uv]
-# exclude-newer = "2024-02-20T00:00:00Z"
+# exclude-newer = "2025-02-20T00:00:00Z"
 # ///
 # pip install wandb python-dotenv python-telegram-bot asyncio && apt install -y gcc
 

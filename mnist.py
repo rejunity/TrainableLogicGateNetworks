@@ -63,9 +63,11 @@ RGB_TO = config.get("RGB_TO", "MONO") # MONO, RGB, LAB
 RGB_TO_RGB = (RGB_TO.startswith("RGB") or RGB_TO == "KEEP")
 RGB_TO_YUV = (RGB_TO.startswith("YUV") or RGB_TO.startswith("YCRCB"))
 RGB_TO_LAB = (RGB_TO.startswith("LAB") or RGB_TO.startswith("OKLAB"))
+BINARIZE_IMAGE_THRESHOLD_DOWNSAMPLE_STEPS = [1,2,2] if RGB_TO.endswith("211") else [1,4,4] if RGB_TO.endswith("411") else [2,1,2] if RGB_TO.endswith("121") else [1] if RGB_TO == "MONO" else [1,1,1]
+BINARIZE_IMAGE_WITH_HISTOGRAM = IMG_CHANNELS == 1 or RGB_TO_LAB
 IMG_WIDTH = int(config.get("IMG_WIDTH", DEFAULT_IMG_WIDTH)) # TT (Tiny Tapeout) optimised value: 16
 IMG_CROP = int(config.get("IMG_CROP", DEFAULT_IMG_WIDTH))   # TT (Tiny Tapeout) optimised value: 22
-INPUT_SIZE = IMG_WIDTH * IMG_WIDTH * len(BINARIZE_IMAGE_THRESHOLD) * (3 if RGB_TO_RGB or RGB_TO_LAB else 1)
+INPUT_SIZE = IMG_WIDTH * IMG_WIDTH * sum([len(BINARIZE_IMAGE_THRESHOLD[s//2::s]) for s in BINARIZE_IMAGE_THRESHOLD_DOWNSAMPLE_STEPS])
 DATA_SPLIT_SEED = int(config.get("DATA_SPLIT_SEED", 42))
 TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.99)) # previous 0.9, NOTE: since we are not using VALIDATION subset in VALIDATION pass, we can boost accuracy a bit by training on the whole dataset
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
@@ -134,7 +136,8 @@ LEGACY = config.get("LEGACY", "0").lower() in ("true", "1", "yes")
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "DATASET", "IMG_COUNT", "RGB_TO",
-               "BINARIZE_IMAGE_THRESHOLD", "IMG_WIDTH", "INPUT_SIZE", "IMG_CROP", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
+               "BINARIZE_IMAGE_THRESHOLD", "BINARIZE_IMAGE_WITH_HISTOGRAM",
+               "IMG_WIDTH", "INPUT_SIZE", "IMG_CROP", "DATA_SPLIT_SEED", "TRAIN_FRACTION", "NUMBER_OF_CATEGORIES", "ONLY_USE_DATA_SUBSET",
                "SEED", "GATE_ARCHITECTURE", "INTERCONNECT_ARCHITECTURE", "BATCH_SIZE",
                "EPOCHS", "EPOCH_STEPS", "TRAINING_STEPS", "PRINTOUT_EVERY", "VALIDATE_EVERY",
                "LEARNING_RATE",
@@ -1008,13 +1011,8 @@ def transform():
         b =  0.0259040371*l_ + 0.7827717662*m_ - 0.8086757660*s_
 
         out = torch.cat([linear_to_srgb(L), a, b], dim=1) # 1x3xHxW
-        return out.squeeze(0)                    # 3xHxW
+        return out.squeeze(0) # 3xHxW
 
-    def binarize_image_with_histogram(image):
-        assert isinstance(BINARIZE_IMAGE_THRESHOLD, list)
-        thresholds = torch.as_tensor(BINARIZE_IMAGE_THRESHOLD, dtype=image.dtype, device=image.device)
-        quantiles = torch.quantile(image, thresholds)
-        channels = [(image > q).float() for q in quantiles]
     def srgb_to_ycrcb(x):
         if x.dim() == 3: x = x.unsqueeze(0)  # 1x3xHxW
         r, g, b = x[:, 0:1], x[:, 1:2], x[:, 2:3]
@@ -1027,6 +1025,22 @@ def transform():
 
         out = torch.cat([Y, Cr, Cb], dim=1) # 1x3xHxW
         return out.squeeze(0) # 3xHxW
+
+    def binarize_image_with_histogram(image, thresholds=BINARIZE_IMAGE_THRESHOLD, downsample_thresholds=BINARIZE_IMAGE_THRESHOLD_DOWNSAMPLE_STEPS, use_histogram=BINARIZE_IMAGE_WITH_HISTOGRAM):
+        if image.dim() == 3:
+            image = image.unsqueeze(0)
+            r, g, b = image[:,0:1], image[:,1:2], image[:,2:3]
+            ds = downsample_thresholds
+            return torch.cat([
+                binarize_image_with_histogram(r, thresholds[ds[0]//2::ds[0]], [1]),
+                binarize_image_with_histogram(g, thresholds[ds[1]//2::ds[1]], [1]),
+                binarize_image_with_histogram(b, thresholds[ds[2]//2::ds[2]], [1])]).view(-1)
+
+        assert isinstance(thresholds, list)
+        thresholds = torch.as_tensor(thresholds, dtype=image.dtype, device=image.device)
+        if use_histogram:
+            thresholds = torch.quantile(image, thresholds) # use quantiles as thresholds
+        channels = [(image > q).float() for q in thresholds]
         return torch.stack(channels, dim=0).view(-1)
 
     def transform_monochrome(apply_augmentations=False):
@@ -1063,7 +1077,7 @@ def transform():
             transforms.Lambda(srgb_to_ycrcb),
             transforms.Lambda(lambda x: binarize_image_with_histogram(x)),
             transforms.Lambda(lambda x: x.view(-1))
-            ] if RGB_TO_YUV else [ # YGB
+            ] if RGB_TO_YUV else [ # RGB
             transforms.CenterCrop((IMG_CROP, IMG_CROP)),
             transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
             transforms.ToTensor(),

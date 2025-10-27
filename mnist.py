@@ -55,6 +55,12 @@ IMG_CHANNELS = 3 if DATASET.startswith("CIFAR") else 1
 IMG_COUNT = 50_000 if DATASET.startswith("CIFAR") else (240_000 if DATASET == "EMNIST" else 60_000) 
 DEFAULT_IMG_WIDTH = 32 if DATASET.startswith("CIFAR") else 28
 
+# TODO:
+# Augmentations
+# Hamming distance
+# 4 channel LRGB, 2111, 4111
+# Improve OKLab
+
 old_BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", -1))
 BINARIZE_IMAGE_THRESHOLD = ast.literal_eval(config.get("BINARIZE_IMAGE_THRESHOLD", "0.75")) if old_BINARIZE_IMAGE_TRESHOLD < 0 else old_BINARIZE_IMAGE_TRESHOLD # Support legacy name with spelling mistake
 if not isinstance(BINARIZE_IMAGE_THRESHOLD, list):

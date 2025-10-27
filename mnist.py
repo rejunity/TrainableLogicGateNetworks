@@ -59,11 +59,12 @@ old_BINARIZE_IMAGE_TRESHOLD = float(config.get("BINARIZE_IMAGE_TRESHOLD", -1))
 BINARIZE_IMAGE_THRESHOLD = ast.literal_eval(config.get("BINARIZE_IMAGE_THRESHOLD", "0.75")) if old_BINARIZE_IMAGE_TRESHOLD < 0 else old_BINARIZE_IMAGE_TRESHOLD # Support legacy name with spelling mistake
 if not isinstance(BINARIZE_IMAGE_THRESHOLD, list):
     BINARIZE_IMAGE_THRESHOLD = [BINARIZE_IMAGE_THRESHOLD]
-RGB_TO = config.get("RGB_TO", "MONO") # MONO, LAB
-RGB_TO_LAB = (RGB_TO == 3 or RGB_TO == "YUV" or RGB_TO == "LAB" or RGB_TO == "OKLAB")
+RGB_TO = config.get("RGB_TO", "MONO") # MONO, RGB, LAB
+RGB_TO_RGB = (RGB_TO.startswith("RGB") or RGB_TO == "KEEP")
+RGB_TO_LAB = (RGB_TO.startswith("LAB") or RGB_TO.startswith("OKLAB"))
 IMG_WIDTH = int(config.get("IMG_WIDTH", DEFAULT_IMG_WIDTH)) # TT (Tiny Tapeout) optimised value: 16
 IMG_CROP = int(config.get("IMG_CROP", DEFAULT_IMG_WIDTH))   # TT (Tiny Tapeout) optimised value: 22
-INPUT_SIZE = IMG_WIDTH * IMG_WIDTH * len(BINARIZE_IMAGE_THRESHOLD) * (3 if RGB_TO_LAB else 1)
+INPUT_SIZE = IMG_WIDTH * IMG_WIDTH * len(BINARIZE_IMAGE_THRESHOLD) * (3 if RGB_TO_RGB or RGB_TO_LAB else 1)
 DATA_SPLIT_SEED = int(config.get("DATA_SPLIT_SEED", 42))
 TRAIN_FRACTION = float(config.get("TRAIN_FRACTION", 0.99)) # previous 0.9, NOTE: since we are not using VALIDATION subset in VALIDATION pass, we can boost accuracy a bit by training on the whole dataset
 NUMBER_OF_CATEGORIES = int(config.get("NUMBER_OF_CATEGORIES", 10))
@@ -1035,19 +1036,23 @@ def transform():
         #                          tt.Normalize(*stats,inplace=True)])
         # valid_tfms = tt.Compose([tt.ToTensor(), tt.Normalize(*stats)])
         
-        return transforms.Compose([
+        return transforms.Compose([ # CIE OKLab
             transforms.CenterCrop((IMG_CROP, IMG_CROP)),
             transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
             transforms.ToTensor(),
             transforms.Lambda(rgb_to_oklab),
-            transforms.Lambda(lambda x: x.view(-1)),
-            transforms.Lambda(lambda x: binarize_image_with_histogram(x))
-            ] if RGB_TO_LAB else [
+            transforms.Lambda(lambda x: binarize_image_with_histogram(x)),
+            transforms.Lambda(lambda x: x.view(-1))
+            ] if RGB_TO_LAB else [ # RGB
             transforms.CenterCrop((IMG_CROP, IMG_CROP)),
             transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
             transforms.ToTensor(),
-            transforms.Normalize(np.array([125.3, 123.0, 113.9]) / 255.0,
-                                 np.array([63.0, 62.1, 66.7]) / 255.0), #  np.array([51.9, 50.9, 51.3]) / 255.0)
+            transforms.Lambda(lambda x: binarize_image_with_histogram(x)),
+            transforms.Lambda(lambda x: x.view(-1)),
+            ] if RGB_TO_RGB else [ # Monocrhome
+            transforms.CenterCrop((IMG_CROP, IMG_CROP)),
+            transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
+            transforms.ToTensor(),
             transforms.Grayscale(1),
             transforms.Lambda(lambda x: x.view(-1)),
             transforms.Lambda(lambda x: binarize_image_with_histogram(x))

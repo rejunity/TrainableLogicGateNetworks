@@ -61,6 +61,7 @@ if not isinstance(BINARIZE_IMAGE_THRESHOLD, list):
     BINARIZE_IMAGE_THRESHOLD = [BINARIZE_IMAGE_THRESHOLD]
 RGB_TO = config.get("RGB_TO", "MONO") # MONO, RGB, LAB
 RGB_TO_RGB = (RGB_TO.startswith("RGB") or RGB_TO == "KEEP")
+RGB_TO_YUV = (RGB_TO.startswith("YUV") or RGB_TO.startswith("YCRCB"))
 RGB_TO_LAB = (RGB_TO.startswith("LAB") or RGB_TO.startswith("OKLAB"))
 IMG_WIDTH = int(config.get("IMG_WIDTH", DEFAULT_IMG_WIDTH)) # TT (Tiny Tapeout) optimised value: 16
 IMG_CROP = int(config.get("IMG_CROP", DEFAULT_IMG_WIDTH))   # TT (Tiny Tapeout) optimised value: 22
@@ -988,7 +989,7 @@ def transform():
     def linear_to_srgb(x):
         return torch.where(x <= 0.0031308, 12.92 * x, 1.055 * torch.pow(x, 1/2.4) - 0.055)
 
-    def rgb_to_oklab(x):
+    def srgb_to_oklab(x):
         # x: 3xHxW in [0,1] sRGB
         if x.dim() == 3: x = x.unsqueeze(0) # 1x3xHxW
         r, g, b = x[:,0:1], x[:,1:2], x[:,2:3]
@@ -1014,6 +1015,18 @@ def transform():
         thresholds = torch.as_tensor(BINARIZE_IMAGE_THRESHOLD, dtype=image.dtype, device=image.device)
         quantiles = torch.quantile(image, thresholds)
         channels = [(image > q).float() for q in quantiles]
+    def srgb_to_ycrcb(x):
+        if x.dim() == 3: x = x.unsqueeze(0)  # 1x3xHxW
+        r, g, b = x[:, 0:1], x[:, 1:2], x[:, 2:3]
+
+        # Standard BT.601 (full-range) coefficients
+        # Reference: https://www.itu.int/rec/R-REC-BT.601
+        Y  = 0.299 * r + 0.587 * g + 0.114 * b
+        Cb = (b - Y) * 0.564 + 0.5
+        Cr = (r - Y) * 0.713 + 0.5
+
+        out = torch.cat([Y, Cr, Cb], dim=1) # 1x3xHxW
+        return out.squeeze(0) # 3xHxW
         return torch.stack(channels, dim=0).view(-1)
 
     def transform_monochrome(apply_augmentations=False):
@@ -1040,10 +1053,17 @@ def transform():
             transforms.CenterCrop((IMG_CROP, IMG_CROP)),
             transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
             transforms.ToTensor(),
-            transforms.Lambda(rgb_to_oklab),
+            transforms.Lambda(srgb_to_oklab),
             transforms.Lambda(lambda x: binarize_image_with_histogram(x)),
             transforms.Lambda(lambda x: x.view(-1))
-            ] if RGB_TO_LAB else [ # RGB
+            ] if RGB_TO_LAB else [ # YUV / YCrCb 
+            transforms.CenterCrop((IMG_CROP, IMG_CROP)),
+            transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
+            transforms.ToTensor(),
+            transforms.Lambda(srgb_to_ycrcb),
+            transforms.Lambda(lambda x: binarize_image_with_histogram(x)),
+            transforms.Lambda(lambda x: x.view(-1))
+            ] if RGB_TO_YUV else [ # YGB
             transforms.CenterCrop((IMG_CROP, IMG_CROP)),
             transforms.Resize((IMG_WIDTH, IMG_WIDTH)),
             transforms.ToTensor(),

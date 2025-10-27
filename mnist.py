@@ -984,10 +984,12 @@ log(f"model={model}")
 def transform():
     def srgb_to_linear(x):
         return torch.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+    def linear_to_srgb(x):
+        return torch.where(x <= 0.0031308, 12.92 * x, 1.055 * torch.pow(x, 1/2.4) - 0.055)
 
-    def rgb_to_oklab(x: torch.Tensor) -> torch.Tensor:
+    def rgb_to_oklab(x):
         # x: 3xHxW in [0,1] sRGB
-        if x.dim() == 3: x = x.unsqueeze(0)      # 1x3xHxW
+        if x.dim() == 3: x = x.unsqueeze(0) # 1x3xHxW
         r, g, b = x[:,0:1], x[:,1:2], x[:,2:3]
         r, g, b = srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)
 
@@ -1003,7 +1005,7 @@ def transform():
         a =  1.9779984951*l_ - 2.4285922050*m_ + 0.4505937099*s_
         b =  0.0259040371*l_ + 0.7827717662*m_ - 0.8086757660*s_
 
-        out = torch.cat([L, a, b], dim=1)        # 1x3xHxW
+        out = torch.cat([linear_to_srgb(L), a, b], dim=1) # 1x3xHxW
         return out.squeeze(0)                    # 3xHxW
 
     def binarize_image_with_histogram(image):

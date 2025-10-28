@@ -132,6 +132,8 @@ TOPK_BIAS = 1/1000
 
 DROPOUT = float(config.get("DROPOUT", 0.0))
 
+USE_HAMMING_DICTIONARY = config.get("USE_HAMMING_DICTIONARY", "0").lower() in ("true", "1", "yes")
+
 LEGACY = config.get("LEGACY", "0").lower() in ("true", "1", "yes")
 
 config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
@@ -146,7 +148,7 @@ config_printout_keys = ["LOG_NAME", "TIMEZONE", "WANDB_PROJECT",
                "NO_SOFTMAX",
                "MANUAL_GAIN",
                "SCALE_LOGITS", "SCALE_TARGET", "TAU_LR",
-               "DROPOUT",
+               "DROPOUT", "USE_HAMMING_DICTIONARY",
                "TOPK_ANNEALING", "TOPK_ANNEALING_TAIL_IN_EPOCHS", "TOPK_ANNEALING_MIN_VALUE",
                "SUPPRESS_PASSTHROUGH", "SUPPRESS_CONST", "TENSION_REGULARIZATION",
                "PROFILE", "FORCE_CPU", "COMPILE_MODEL"]
@@ -718,6 +720,11 @@ class Model(nn.Module):
         self.outputs_per_category = self.last_layer_gates // self.number_of_categories
         assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
 
+        if USE_HAMMING_DICTIONARY:
+            binary_vectors, binary_vectors_min_distance = self.maximally_spaced_binary_vectors(self.last_layer_gates, self.number_of_categories)
+            self.register_buffer("category_mapping", binary_vectors.T.to(torch.float))
+            # log(f"Created binary vectors for category mapping, min_distance={binary_vectors_min_distance}")
+
         layers_ = []
         layer_inputs = input_size
         R = [input_size]
@@ -770,7 +777,10 @@ class Model(nn.Module):
         if hasattr(self, 'dropout_last'):
             X = self.dropout_last(X)
 
-        X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
+        if USE_HAMMING_DICTIONARY:
+            X = torch.matmul(X, self.category_mapping)
+        else:
+            X = X.view(X.size(0), self.number_of_categories, self.outputs_per_category).sum(dim=-1)
         if not self.training:   # INFERENCE ends here! Everything past this line will only concern training
             return X            # Finishing inference here is both:
                                 # 1) an OPTIMISATION and
@@ -970,6 +980,57 @@ class Model(nn.Module):
                 total_weight = weights_after_softmax.sum()
                 gate_fraction_array.append(pass_weight / total_weight)
         return torch.mean(torch.tensor(gate_fraction_array)).item()
+
+    def maximally_spaced_binary_vectors(self, N, k=10):
+        assert k <= 1024, "This routine targets small k; k=10 by default."
+
+        def hadamard_like_rows(m):
+            """Kronecker-based Sylvester Hadamard to the next power of two ≥ m."""
+            base = torch.tensor([[1, 1],
+                                 [1, -1]], dtype=torch.int8)
+
+            # Find the exponent k s.t. 2^k >= m
+            size = 1
+            k = 0
+            while size < m:
+                size <<= 1
+                k += 1
+
+            H = torch.tensor([[1]], dtype=torch.int8)
+            for _ in range(k):
+                H = torch.kron(base, H)  # grows 2x each step
+            return H
+
+        def to_binary(sign_mat):
+            # Map {+1,-1} -> {1,0} (balanced)
+            return (sign_mat == 1).to(torch.uint8)
+
+        def pairwise_hamming(X):
+            # X: [k,n] in {0,1}; returns [k,k] distances
+            k = X.shape[0]
+            # XOR via broadcasting; efficient since k=10
+            diff = X.unsqueeze(1) ^ X.unsqueeze(0)  # [k,k,n]
+            return diff.sum(dim=2)
+
+        def min_pairwise_hamming(X):
+            D = pairwise_hamming(X)
+            k = X.shape[0]
+            mask = torch.ones((k,k), dtype=torch.bool)
+            mask.fill_diagonal_(False)
+            return D[mask].min().item()
+
+        # Hadamard-like initialization
+        m = 1 << math.ceil(math.log2(N))           # next power of 2 >= N
+        H = hadamard_like_rows(m)                  # [m,m] in {+1,-1}
+        # Skip the first all-constant row; pick k rows with good diversity
+        row_idxs = torch.arange(1, k+1)
+        X_full = to_binary(H[row_idxs])            # [k,m] in {0,1}
+
+        # Choose N columns. Shuffle to avoid bias, then take first N.
+        perm = torch.randperm(m)
+        X = X_full[:, perm[:N]].clone()            # [k,N] uint8
+
+        return X, min_pairwise_hamming(X)
 
 
 ### INSTANTIATE THE MODEL AND MOVE TO GPU ###

@@ -721,9 +721,8 @@ class Model(nn.Module):
         assert self.last_layer_gates == self.number_of_categories * self.outputs_per_category
 
         if USE_HAMMING_DICTIONARY:
-            binary_vectors, binary_vectors_min_distance = self.maximally_spaced_binary_vectors(self.last_layer_gates, self.number_of_categories)
+            binary_vectors = self.maximally_spaced_binary_vectors(self.last_layer_gates, self.number_of_categories)
             self.register_buffer("category_mapping", binary_vectors.T.to(torch.float))
-            # log(f"Created binary vectors for category mapping, min_distance={binary_vectors_min_distance}")
 
         layers_ = []
         layer_inputs = input_size
@@ -1005,20 +1004,6 @@ class Model(nn.Module):
             # Map {+1,-1} -> {1,0} (balanced)
             return (sign_mat == 1).to(torch.uint8)
 
-        def pairwise_hamming(X):
-            # X: [k,n] in {0,1}; returns [k,k] distances
-            k = X.shape[0]
-            # XOR via broadcasting; efficient since k=10
-            diff = X.unsqueeze(1) ^ X.unsqueeze(0)  # [k,k,n]
-            return diff.sum(dim=2)
-
-        def min_pairwise_hamming(X):
-            D = pairwise_hamming(X)
-            k = X.shape[0]
-            mask = torch.ones((k,k), dtype=torch.bool)
-            mask.fill_diagonal_(False)
-            return D[mask].min().item()
-
         # Hadamard-like initialization
         m = 1 << math.ceil(math.log2(N))           # next power of 2 >= N
         H = hadamard_like_rows(m)                  # [m,m] in {+1,-1}
@@ -1030,8 +1015,7 @@ class Model(nn.Module):
         perm = torch.randperm(m)
         X = X_full[:, perm[:N]].clone()            # [k,N] uint8
 
-        return X, min_pairwise_hamming(X)
-
+        return X
 
 ### INSTANTIATE THE MODEL AND MOVE TO GPU ###
 
@@ -1348,6 +1332,19 @@ def l1_topk(weights_after_softmax, k=4, special_dim=0): # but goes to 1 when bin
     non_top_k_sum = (1 - top_k_sum).sum()
     return 1. - non_top_k_sum / normalization_factor
 
+def pairwise_hamming(X):
+    # X: [k,n] in {0,1}; returns [k,k] distances
+    k = X.shape[0]
+    # XOR via broadcasting; efficient since k=10
+    diff = X.unsqueeze(1) ^ X.unsqueeze(0)  # [k,k,n]
+    return diff.sum(dim=2)
+
+def min_pairwise_hamming(X):
+    D = pairwise_hamming(X)
+    D.fill_diagonal_(D.max().item()) # ignore 0 distances on the diagonal
+                                     # by overwriting them with a max value
+    return D.min().item()
+
 ### TRAIN ###
 
 validate = get_validate(model)
@@ -1356,6 +1353,8 @@ passthrough_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_passt
 unique_log = ", ".join([f"{value * 100:4.1f}%" for value in model.get_unique_fraction()])
 log(f"INIT VAL loss={val_loss:6.3f} acc={val_accuracy*100:6.2f}%                 - Pass {passthrough_log} | Connectivity {unique_log}")
 WANDB_KEY and wandb.log({"init_val": val_accuracy*100})
+if USE_HAMMING_DICTIONARY:
+    log(f"INIT MAP categories min distance={min_pairwise_hamming((model.category_mapping == 1.).T)}")
 
 log(f"EPOCH_STEPS={EPOCH_STEPS}, will train for {EPOCHS} EPOCHS")
 if LEGACY:
